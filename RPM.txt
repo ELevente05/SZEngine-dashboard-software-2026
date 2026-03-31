@@ -1,0 +1,28 @@
+LED RPM Ranges (9 LEDs: 3 Green, 3 Yellow, 3 Red)
+rpmStart = 4000 RPM
+rpmMax = 7200 RPM (Extended for full 9th LED range)
+
+0 - 4355 RPM       = OFF
+4356 - 4711 RPM    = 1 Green
+4712 - 5066 RPM    = 2 Green
+5067 - 5422 RPM    = 3 Green
+5423 - 5777 RPM    = 3 Green + 1 Yellow
+5778 - 6133 RPM    = 3 Green + 2 Yellow
+6134 - 6488 RPM    = 3 Green + 3 Yellow
+6489 - 6844 RPM    = 3 Green + 3 Yellow + 1 RED
+6845 - 7199 RPM    = 3 Green + 3 Yellow + 2 RED
+7200               = 3 Green + 3 Yellow + 3 RED
+7201-   ... RPM    = All blue
+
+
+State 0 (All LEDs Off): RPM is under 4000
+State 1 (1st Green): 4000 to 4666 RPM
+State 2 (2nd Green): 4667 to 5333 RPM
+State 3 (3rd Green): 5334 to 5999 RPM
+State 4 (1st Yellow): 6000 to 6666 RPM
+State 5 (2nd Yellow): 6667 to 7333 RPM
+State 6 (3rd Yellow): 7334 to 7999 RPM
+State 7 (1st Red): 8000 to 8666 RPM
+State 8 (2nd Red): 8667 to 9333 RPM
+State 9 (3rd Red): 9334 to 9999 RPM
+State 10 (All Strobe Blue): RPM is 10000 or higher

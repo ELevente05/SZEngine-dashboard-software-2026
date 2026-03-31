@@ -3,7 +3,7 @@ import time
 import math
 
 # --- CONFIGURATION ---
-COM_PORT = 'COM9'
+COM_PORT = 'COM7'
 BAUD_RATE = 115200
 
 try:
@@ -26,15 +26,15 @@ try:
     while True:
         
         rpm_cycle = math.sin(time_elapsed) 
-        rpm = int(4500 + (rpm_cycle + 1) * 1350)
+        rpm = int(7350 + rpm_cycle * 3650)
         
         
-        if rpm > 7000 and gear < 6:
+        if rpm > 8500 and gear < 6:
             gear += 1
-        elif rpm < 5000 and gear > 1:
+        elif rpm < 6500 and gear > 1:
             gear -= 1
 
-        boost = max(0.0, (rpm - 3000) / 2500.0)
+        boost = max(0.0, (rpm - 3700) / 7300.0)
         if boost > 1.8: boost = 1.8
 
         oil_temp += 0.01

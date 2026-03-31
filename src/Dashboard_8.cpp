@@ -48,7 +48,7 @@ int rpm = 0;
 
 // --- SHIFT LIGHT SETTINGS ---
 int rpmStart = 4000;
-int rpmMax = 7000;
+int rpmMax = 10000;
 
 // --- MAXXECU BIG-ENDIAN PARSER ---
 int16_t parseBE(uint8_t* data, int offset) {
@@ -57,28 +57,41 @@ int16_t parseBE(uint8_t* data, int offset) {
 
 // --- SHIFT LIGHT LOGIC ---
 void updateLEDs() {
-  int numLedsToLight = map(rpm, rpmStart, rpmMax, 0, NUM_LEDS);
-  if (numLedsToLight < 0) numLedsToLight = 0;
-  if (numLedsToLight > NUM_LEDS) numLedsToLight = NUM_LEDS;
+  int numLedsToLight = 0;
+  bool revLimiter = false;
 
-  // Strobe all LEDs Blue if hitting the rev limiter
+  // 1. Determine the exact state (11 possible intervals)
   if (rpm >= rpmMax) {
-    if ((millis() / 50) % 2 == 0) fill_solid(leds, NUM_LEDS, CRGB::Blue);
-    else fill_solid(leds, NUM_LEDS, CRGB::Black);
+    revLimiter = true;
   } 
-  // 3 Green, 3 Yellow, 2 Red, 1 Blue
+  else if (rpm >= rpmStart) {
+    // This creates 9 perfectly equal RPM buckets.
+    // The +1 ensures the 1st LED turns on exactly at rpmStart.
+    numLedsToLight = (int)((rpm - rpmStart) * NUM_LEDS / (float)(rpmMax - rpmStart)) + 1;
+    
+    // Safety clamp just in case
+    if (numLedsToLight > NUM_LEDS) numLedsToLight = NUM_LEDS;
+  }
+
+  // 2. Draw the LEDs
+  if (revLimiter) {
+    // State 11: All Blue!
+    fill_solid(leds, NUM_LEDS, CRGB::Blue);
+  } 
   else {
+    // States 1-10: Normal Sweep
     for (int i = 0; i < NUM_LEDS; i++) {
-      if (i < numLedsToLight) {
-        if (i < 3) leds[i] = CRGB::Green;
-        else if (i < 6) leds[i] = CRGB::Yellow;
-        else if (i < 8) leds[i] = CRGB::Red;
-        else leds[i] = CRGB::Blue; 
+      if (i >= NUM_LEDS - numLedsToLight) {
+        // Fill from the right side
+        if (i >= 6) leds[i] = CRGB::Green;       // positions 8, 7, 6
+        else if (i >= 3) leds[i] = CRGB::Yellow; // positions 5, 4, 3
+        else leds[i] = CRGB::Red;                // positions 2, 1, 0
       } else {
         leds[i] = CRGB::Black;
       }
     }
   }
+  
   FastLED.show();
 }
 
@@ -103,29 +116,29 @@ void drawScreen1() {
   char textBuffer[32]; 
   u8g2.setFont(u8g2_font_logisoso92_tn); 
   snprintf(textBuffer, sizeof(textBuffer), "%d", currentGear);
-  u8g2.drawStr(95, 115, textBuffer);
+  u8g2.drawStr(95, 125, textBuffer);
   
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
   u8g2.setFont(u8g2_font_profont22_tr);
-  u8g2.drawStr(2, 14, "Boost");
-  u8g2.drawStr(105, 14, "Gear");
-  u8g2.drawStr(190, 14, "SoC");
-  u8g2.drawStr(161, 94, "Hy.T"); 
+  u8g2.drawStr(20, 24, "Boost");
+  u8g2.drawStr(105, 24, "Gear");
+  u8g2.drawStr(190, 24, "SoC");
+  u8g2.drawStr(161, 104, "Hy.T"); 
 
   u8g2.setFont(u8g2_font_profont29_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%d%%", stateOfCharge); 
-  u8g2.drawStr(176, 38, textBuffer);
+  u8g2.drawStr(176, 48, textBuffer);
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", boostPressure);
-  u8g2.drawStr(20, 65, textBuffer);
+  u8g2.drawStr(33, 77, textBuffer);
 
   u8g2.setFont(u8g2_font_profont22_tf);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f°C", hybridTemp);
-  u8g2.drawUTF8(161, 116, textBuffer); 
+  u8g2.drawUTF8(161, 126, textBuffer); 
 
-  drawGauge(36, 59, 35, 10, 0.0, 2.5, boostPressure);
+  drawGauge(50, 70, 40, 10, 0.0, 2.5, boostPressure);
 }
 
 // --- SCREEN 2: WARM-UP ---
@@ -186,7 +199,7 @@ void setup() {
 
   // Initialize LED Bar
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
-  FastLED.setBrightness(150);
+  FastLED.setBrightness(50);
   FastLED.clear(true);
 
   // --- HARDWARE TEST: Flash Red at Boot ---
@@ -250,7 +263,7 @@ void loop() {
   }
 
   // --- 2. SERIAL INPUT ---
-  if (Serial.available()) {
+  while (Serial.available()) {
     String input = Serial.readStringUntil('\n');
     input.trim(); 
     
@@ -281,6 +294,16 @@ void loop() {
   if (activeScreen == 1) drawScreen1();
   else if (activeScreen == 2) drawScreen2();
   u8g2.sendBuffer();          
+  
+  // Debug: Show RPM every 500ms
+  static unsigned long lastDebug = 0;
+  if (millis() - lastDebug > 500) {
+    Serial.print("RPM: ");
+    Serial.print(rpm);
+    Serial.print(" | Strobe: ");
+    Serial.println(rpm >= rpmMax ? "YES" : "NO");
+    lastDebug = millis();
+  }
   
   delay(20); 
 }
