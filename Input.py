@@ -20,7 +20,9 @@ rpm = 4000
 oil_temp = 85.0
 boost = 0.0
 hybrid_temp = 25.0
-soc = 80.0 
+soc = 80.0
+last_gear_change = 0
+gear_change_cooldown = 0.5
 
 try:
     while True:
@@ -28,11 +30,14 @@ try:
         rpm_cycle = math.sin(time_elapsed) 
         rpm = int(7350 + rpm_cycle * 3650)
         
-        
-        if rpm > 8500 and gear < 6:
-            gear += 1
-        elif rpm < 6500 and gear > 1:
-            gear -= 1
+        # Gear change with cooldown to prevent rapid shifting
+        if time_elapsed - last_gear_change >= gear_change_cooldown:
+            if rpm > 8500 and gear < 6:
+                gear += 1
+                last_gear_change = time_elapsed
+            elif rpm < 6500 and gear > 1:
+                gear -= 1
+                last_gear_change = time_elapsed
 
         boost = max(0.0, (rpm - 3700) / 7300.0)
         if boost > 1.8: boost = 1.8

@@ -1,6 +1,7 @@
 /*
- * ESP32-S3-N16R8 Receiver Dashboard
- * MaxxECU CAN Parsing & F1 FastLED Shift Light
+ * ESP32-S3-N16R8 Serial Input Controller
+ * Receives Serial commands and transmits as CAN messages to Dashboard_8
+ * Also displays values locally for verification
  */
 
 #include <Arduino.h>
@@ -50,9 +51,10 @@ int rpm = 0;
 int rpmStart = 4000;
 int rpmMax = 10000;
 
-// --- MAXXECU BIG-ENDIAN PARSER ---
-int16_t parseBE(uint8_t* data, int offset) {
-  return (data[offset] << 8) | data[offset + 1];
+// --- BIG-ENDIAN ENCODER ---
+void encodeBE(uint8_t* data, int offset, int16_t value) {
+  data[offset] = (value >> 8) & 0xFF;
+  data[offset + 1] = value & 0xFF;
 }
 
 // --- SHIFT LIGHT LOGIC ---
@@ -60,32 +62,23 @@ void updateLEDs() {
   int numLedsToLight = 0;
   bool revLimiter = false;
 
-  // 1. Determine the exact state (11 possible intervals)
   if (rpm >= rpmMax) {
     revLimiter = true;
   } 
   else if (rpm >= rpmStart) {
-    // This creates 9 perfectly equal RPM buckets.
-    // The +1 ensures the 1st LED turns on exactly at rpmStart.
     numLedsToLight = (int)((rpm - rpmStart) * NUM_LEDS / (float)(rpmMax - rpmStart)) + 1;
-    
-    // Safety clamp just in case
     if (numLedsToLight > NUM_LEDS) numLedsToLight = NUM_LEDS;
   }
 
-  // 2. Draw the LEDs
   if (revLimiter) {
-    // State 11: All Blue!
     fill_solid(leds, NUM_LEDS, CRGB::Blue);
   } 
   else {
-    // States 1-10: Normal Sweep
     for (int i = 0; i < NUM_LEDS; i++) {
       if (i >= NUM_LEDS - numLedsToLight) {
-        // Fill from the right side
-        if (i >= 6) leds[i] = CRGB::Green;       // positions 8, 7, 6
-        else if (i >= 3) leds[i] = CRGB::Yellow; // positions 5, 4, 3
-        else leds[i] = CRGB::Red;                // positions 2, 1, 0
+        if (i >= 6) leds[i] = CRGB::Green;
+        else if (i >= 3) leds[i] = CRGB::Yellow;
+        else leds[i] = CRGB::Red;
       } else {
         leds[i] = CRGB::Black;
       }
@@ -189,10 +182,84 @@ void drawScreen2() {
   snprintf(textBuffer, sizeof(textBuffer), "%d", currentGear); u8g2.drawStr(205, 120, textBuffer);
 }
 
+// --- SEND CAN MESSAGE ---
+void sendCANMessage(uint32_t id, uint8_t* data, uint8_t length) {
+  twai_message_t tx_msg;
+  tx_msg.identifier = id;
+  tx_msg.extd = 0;
+  tx_msg.rtr = 0;
+  tx_msg.data_length_code = length;
+  memcpy(tx_msg.data, data, length);
+  
+  if (twai_transmit(&tx_msg, pdMS_TO_TICKS(100)) == ESP_OK) {
+    Serial.print("CAN TX [0x");
+    Serial.print(id, HEX);
+    Serial.println("] OK");
+  } else {
+    Serial.print("CAN TX [0x");
+    Serial.print(id, HEX);
+    Serial.println("] FAILED");
+  }
+}
+
+// --- TRANSMIT CAN MESSAGES FOR EACH VALUE CHANGE ---
+void transmitRPM() {
+  uint8_t data[8] = {0};
+  encodeBE(data, 0, (int16_t)rpm);
+  encodeBE(data, 6, (int16_t)(lambdaVal * 1000));
+  sendCANMessage(0x520, data, 8);
+}
+
+void transmitBattery() {
+  uint8_t data[8] = {0};
+  encodeBE(data, 0, (int16_t)(batteryVolts * 100));
+  encodeBE(data, 4, (int16_t)(intakeTemp * 10));
+  encodeBE(data, 6, (int16_t)(engineWaterTemp * 10));
+  sendCANMessage(0x530, data, 8);
+}
+
+void transmitEGT() {
+  uint8_t data[8] = {0};
+  encodeBE(data, 6, (int16_t)egt);
+  sendCANMessage(0x531, data, 8);
+}
+
+void transmitGear() {
+  uint8_t data[8] = {0};
+  data[0] = currentGear;
+  encodeBE(data, 4, (int16_t)(oilPress * 1000));
+  encodeBE(data, 6, (int16_t)(oilTemp * 10));
+  sendCANMessage(0x536, data, 8);
+}
+
+void transmitCustom1() {
+  uint8_t data[8] = {0};
+  memcpy(&data[4], &icWaterTemp, 4);
+  sendCANMessage(0x101, data, 8);
+}
+
+void transmitCustom2() {
+  uint8_t data[8] = {0};
+  memcpy(&data[0], &boostPressure, 4);
+  memcpy(&data[4], &hybridTemp, 4);
+  sendCANMessage(0x104, data, 8);
+}
+
+void transmitCustom3() {
+  uint8_t data[8] = {0};
+  memcpy(&data[0], &hybridVolts, 4);
+  data[5] = stateOfCharge;
+  data[6] = activeScreen;
+  sendCANMessage(0x105, data, 8);
+}
+
 // --- SETUP ---
 void setup() {
   Serial.begin(115200); 
   delay(1000); 
+
+  Serial.println("\n=== ESP32-S3 Serial Input Controller ===");
+  Serial.println("This device receives serial input and transmits CAN messages");
 
   pinMode(BACKLIGHT_PIN, OUTPUT);
   digitalWrite(BACKLIGHT_PIN, HIGH); 
@@ -202,8 +269,8 @@ void setup() {
   FastLED.setBrightness(50);
   FastLED.clear(true);
 
-  // --- HARDWARE TEST: Flash Red at Boot ---
-  fill_solid(leds, NUM_LEDS, CRGB::Red);
+  // --- HARDWARE TEST: Flash Green at Boot ---
+  fill_solid(leds, NUM_LEDS, CRGB::Green);
   FastLED.show();
   delay(1000);
   fill_solid(leds, NUM_LEDS, CRGB::Black);
@@ -219,74 +286,89 @@ void setup() {
 
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
     twai_start();
+    Serial.println("CAN Bus initialized successfully");
+  } else {
+    Serial.println("Failed to initialize CAN Bus");
   }
 }
 
 // --- MAIN LOOP ---
 void loop() {
   
-  // --- 1. PROCESS INCOMING CAN MESSAGES ---
-  twai_message_t rx_msg;
-  while (twai_receive(&rx_msg, 0) == ESP_OK) {
-    switch (rx_msg.identifier) {
-      case 0x520: // RPM, Throttle, Lambda
-        rpm = parseBE(rx_msg.data, 0); 
-        lambdaVal = parseBE(rx_msg.data, 6) * 0.001; 
-        break;
-      case 0x530: // Battery, IAT, EWT
-        batteryVolts = parseBE(rx_msg.data, 0) * 0.01; 
-        intakeTemp = parseBE(rx_msg.data, 4) * 0.1; 
-        engineWaterTemp = parseBE(rx_msg.data, 6) * 0.1; 
-        break;
-      case 0x531: // EGT
-        egt = parseBE(rx_msg.data, 6) * 1.0; 
-        break;
-      case 0x536: // Gear, Oil Press, Oil Temp
-        currentGear = rx_msg.data[0]; 
-        oilPress = parseBE(rx_msg.data, 4) * 0.001; 
-        oilTemp = parseBE(rx_msg.data, 6) * 0.1; 
-        break;
-
-      // CUSTOM VALUES PRESERVED ON OLD IDs
-      case 0x101: memcpy(&icWaterTemp, &rx_msg.data[4], 4); break;
-      case 0x104: 
-        memcpy(&boostPressure, &rx_msg.data[0], 4); 
-        memcpy(&hybridTemp, &rx_msg.data[4], 4); 
-        break;
-      case 0x105: 
-        memcpy(&hybridVolts, &rx_msg.data[0], 4);
-        stateOfCharge = rx_msg.data[5];
-        activeScreen = rx_msg.data[6]; 
-        break;
-    }
-  }
-
-  // --- 2. SERIAL INPUT ---
+  // --- 1. SERIAL INPUT ---
   while (Serial.available()) {
     String input = Serial.readStringUntil('\n');
     input.trim(); 
     
     if (input.startsWith("C")) {
       int desiredScreen = input.substring(1).toInt();
-      if (desiredScreen == 1 || desiredScreen == 2) activeScreen = desiredScreen;
+      if (desiredScreen == 1 || desiredScreen == 2) {
+        activeScreen = desiredScreen;
+        transmitCustom3();
+      }
     }
-    else if (input.startsWith("RPM")) rpm = input.substring(3).toInt();
-    else if (input.startsWith("OT")) oilTemp = input.substring(2).toFloat();
-    else if (input.startsWith("OP")) oilPress = input.substring(2).toFloat();
-    else if (input.startsWith("EWT")) engineWaterTemp = input.substring(3).toFloat();
-    else if (input.startsWith("IWT")) icWaterTemp = input.substring(3).toFloat();
-    else if (input.startsWith("L")) lambdaVal = input.substring(1).toFloat();
-    else if (input.startsWith("IT")) intakeTemp = input.substring(2).toFloat();
-    else if (input.startsWith("EGT")) egt = input.substring(3).toFloat();
-    else if (input.startsWith("BV")) batteryVolts = input.substring(2).toFloat();
-    else if (input.startsWith("BP")) boostPressure = input.substring(2).toFloat();
-    else if (input.startsWith("HT")) hybridTemp = input.substring(2).toFloat();
-    else if (input.startsWith("HV")) hybridVolts = input.substring(2).toFloat();
-    else if (input.startsWith("G")) currentGear = input.substring(1).toInt();
-    else if (input.startsWith("SoC")) stateOfCharge = input.substring(3).toInt();
+    else if (input.startsWith("RPM")) {
+      rpm = input.substring(3).toInt();
+      transmitRPM();
+    }
+    else if (input.startsWith("OT")) {
+      oilTemp = input.substring(2).toFloat();
+      transmitGear();
+    }
+    else if (input.startsWith("OP")) {
+      oilPress = input.substring(2).toFloat();
+      transmitGear();
+    }
+    else if (input.startsWith("EWT")) {
+      engineWaterTemp = input.substring(3).toFloat();
+      transmitBattery();
+    }
+    else if (input.startsWith("IWT")) {
+      icWaterTemp = input.substring(3).toFloat();
+      transmitCustom1();
+    }
+    else if (input.startsWith("L")) {
+      lambdaVal = input.substring(1).toFloat();
+      transmitRPM();
+    }
+    else if (input.startsWith("IT")) {
+      intakeTemp = input.substring(2).toFloat();
+      transmitBattery();
+    }
+    else if (input.startsWith("EGT")) {
+      egt = input.substring(3).toFloat();
+      transmitEGT();
+    }
+    else if (input.startsWith("BV")) {
+      batteryVolts = input.substring(2).toFloat();
+      transmitBattery();
+    }
+    else if (input.startsWith("BP")) {
+      boostPressure = input.substring(2).toFloat();
+      transmitCustom2();
+    }
+    else if (input.startsWith("HT")) {
+      hybridTemp = input.substring(2).toFloat();
+      transmitCustom2();
+    }
+    else if (input.startsWith("HV")) {
+      hybridVolts = input.substring(2).toFloat();
+      transmitCustom3();
+    }
+    else if (input.startsWith("G")) {
+      currentGear = input.substring(1).toInt();
+      transmitGear();
+    }
+    else if (input.startsWith("SoC")) {
+      stateOfCharge = input.substring(3).toInt();
+      transmitCustom3();
+    }
+    else {
+      Serial.println("Unknown command. Use: RPM, OT, OP, EWT, IWT, L, IT, EGT, BV, BP, HT, HV, G, SoC, C#");
+    }
   }
 
-  // --- 3. DRAW SCREEN & UPDATE LEDS ---
+  // --- 2. DRAW SCREEN & UPDATE LEDS ---
   updateLEDs();
   
   u8g2.clearBuffer();          
