@@ -6,7 +6,7 @@ import sys
 # ==========================================
 # --- 1. CONFIGURATION ---
 # ==========================================
-COM_PORT = 'COM7'
+COM_PORT = 'COM9'
 BAUD_RATE = 115200
 CSV_FILENAME = 'FSAA_Endu_log_2023-08-26_levi_for_dash.csv'
 UPDATE_RATE_HZ = 20  # 20 updates per second (50ms delay)
