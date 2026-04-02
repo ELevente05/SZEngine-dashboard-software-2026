@@ -1,0 +1,80 @@
+
+u8g2.setFontMode(1);
+u8g2.setBitmapMode(1);
+u8g2.drawLine(119, 0, 119, 127);
+
+u8g2.drawLine(1, 42, 240, 42);
+
+u8g2.drawLine(0, 84, 240, 84);
+
+u8g2.drawLine(59, 0, 59, 127);
+
+u8g2.drawLine(180, 0, 180, 128);
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(15, 11, "V_1");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(0, 35, "99.99");
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(77, 11, "V_2");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(60, 35, "99.99");
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(134, 11, "V_3");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(121, 35, "99.99");
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(135, 56, "V_7");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(121, 77, "99.99");
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(15, 56, "V_5");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(0, 77, "99.99");
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(76, 56, "V_6");
+
+u8g2.drawStr(190, 97, "I_out");
+
+u8g2.drawStr(198, 55, "V_8");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(61, 77, "99.99");
+
+u8g2.drawStr(182, 77, "99.99");
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(14, 97, "V_9");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(0, 121, "99.99");
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(74, 97, "V_10");
+
+u8g2.drawStr(130, 97, "V_out");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(60, 121, "99.99");
+
+u8g2.drawStr(121, 121, "99.99");
+
+u8g2.drawStr(182, 121, "999.9");
+
+u8g2.setFont(u8g2_font_t0_16b_tr);
+u8g2.drawStr(199, 11, "V_4");
+
+u8g2.setFont(u8g2_font_profont22_tr);
+u8g2.drawStr(182, 35, "99.99");
+
+u8g2.sendBuffer();

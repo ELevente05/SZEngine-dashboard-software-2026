@@ -70,7 +70,7 @@ u8g2.drawStr(60, 121, "99.99");
 u8g2.drawStr(121, 121, "99.99");
 
 u8g2.setFont(u8g2_font_t0_16b_tr);
-u8g2.drawStr(199, 11, "V_4");
+u8g2.drawStr(199, 11, "T_4");
 
 u8g2.setFont(u8g2_font_profont22_tr);
 u8g2.drawStr(182, 121, "99.99");
