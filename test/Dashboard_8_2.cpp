@@ -5,6 +5,7 @@
  */
 
 #include <Arduino.h>
+#include <stdio.h>
 #include "driver/twai.h"
 
 // --- PIN CONFIG ---
@@ -27,6 +28,12 @@ int currentGear = 0;
 int stateOfCharge = 80; 
 int activeScreen = 1; 
 int rpm = 0;
+
+// New Arrays for Screens 3 & 4
+float T[12] = {0.0};  // T_1 to T_12
+float V[10] = {0.0};  // V_1 to V_10
+float V_out = 0.0;
+float I_out = 0.0;
 
 // --- SERIAL & TIMING ---
 unsigned long lastBroadcastTime = 0;
@@ -71,6 +78,10 @@ void setup() {
 
 // --- HIGH SPEED SERIAL PARSER ---
 void processCommand(char* cmd) {
+  int idx;
+  float fval;
+
+  // Screen & General Engine Params
   if (cmd[0] == 'C') activeScreen = atoi(&cmd[1]);
   else if (strncmp(cmd, "RPM", 3) == 0) rpm = atoi(&cmd[3]);
   else if (strncmp(cmd, "EWT", 3) == 0) engineWaterTemp = atof(&cmd[3]);
@@ -84,8 +95,18 @@ void processCommand(char* cmd) {
   else if (strncmp(cmd, "BP", 2) == 0) boostPressure = atof(&cmd[2]);
   else if (strncmp(cmd, "HT", 2) == 0) hybridTemp = atof(&cmd[2]);
   else if (strncmp(cmd, "HV", 2) == 0) hybridVolts = atof(&cmd[2]);
-  else if (strncmp(cmd, "L", 1) == 0) lambdaVal = atof(&cmd[1]);
+  else if (strncmp(cmd, "L", 1) == 0 && !isalpha(cmd[1])) lambdaVal = atof(&cmd[1]);
   else if (strncmp(cmd, "G", 1) == 0) currentGear = atoi(&cmd[1]);
+  
+  // New: Screen 3 & 4 Parse Logic
+  else if (strncmp(cmd, "VOUT=", 5) == 0) V_out = atof(&cmd[5]);
+  else if (strncmp(cmd, "IOUT=", 5) == 0) I_out = atof(&cmd[5]);
+  else if (sscanf(cmd, "T%d=%f", &idx, &fval) == 2) {
+    if (idx >= 1 && idx <= 12) T[idx - 1] = fval;
+  } 
+  else if (sscanf(cmd, "V%d=%f", &idx, &fval) == 2) {
+    if (idx >= 1 && idx <= 10) V[idx - 1] = fval;
+  }
 }
 
 void loop() {
@@ -130,7 +151,6 @@ void loop() {
     // Frame 0x536: Gear, Oil Pressure, Oil Temp
     memset(payload, 0, 8);
     payload[0] = (uint8_t)currentGear; 
-    // Dash expects kPa (* 0.001) to display Bar, so we send Bar * 1000
     encodeBE(payload, 4, (int16_t)(oilPress * 1000)); 
     encodeBE(payload, 6, (int16_t)(oilTemp * 10));
     broadcastData(0x536, payload, 8);
@@ -155,5 +175,58 @@ void loop() {
     payload[5] = (uint8_t)stateOfCharge;
     payload[6] = (uint8_t)activeScreen;
     broadcastData(0x105, payload, 7); 
+
+
+    // --- NEW TEMPERATURE FRAMES (Multiplying by 10 to match receiver's * 0.1 factor) ---
+    
+    // Frame 0x600: T_1 to T_4
+    memset(payload, 0, 8);
+    encodeBE(payload, 0, (int16_t)(T[0] * 10));
+    encodeBE(payload, 2, (int16_t)(T[1] * 10));
+    encodeBE(payload, 4, (int16_t)(T[2] * 10));
+    encodeBE(payload, 6, (int16_t)(T[3] * 10));
+    broadcastData(0x600, payload, 8);
+
+    // Frame 0x601: T_5 to T_8
+    memset(payload, 0, 8);
+    encodeBE(payload, 0, (int16_t)(T[4] * 10));
+    encodeBE(payload, 2, (int16_t)(T[5] * 10));
+    encodeBE(payload, 4, (int16_t)(T[6] * 10));
+    encodeBE(payload, 6, (int16_t)(T[7] * 10));
+    broadcastData(0x601, payload, 8);
+
+    // Frame 0x602: T_9 to T_12
+    memset(payload, 0, 8);
+    encodeBE(payload, 0, (int16_t)(T[8] * 10));
+    encodeBE(payload, 2, (int16_t)(T[9] * 10));
+    encodeBE(payload, 4, (int16_t)(T[10] * 10));
+    encodeBE(payload, 6, (int16_t)(T[11] * 10));
+    broadcastData(0x602, payload, 8);
+
+    // --- NEW VOLTAGE & CURRENT FRAMES ---
+
+    // Frame 0x610: V_1 to V_4
+    memset(payload, 0, 8);
+    encodeBE(payload, 0, (int16_t)(V[0] * 10));
+    encodeBE(payload, 2, (int16_t)(V[1] * 10));
+    encodeBE(payload, 4, (int16_t)(V[2] * 10));
+    encodeBE(payload, 6, (int16_t)(V[3] * 10));
+    broadcastData(0x610, payload, 8);
+
+    // Frame 0x611: V_5 to V_8
+    memset(payload, 0, 8);
+    encodeBE(payload, 0, (int16_t)(V[4] * 10));
+    encodeBE(payload, 2, (int16_t)(V[5] * 10));
+    encodeBE(payload, 4, (int16_t)(V[6] * 10));
+    encodeBE(payload, 6, (int16_t)(V[7] * 10));
+    broadcastData(0x611, payload, 8);
+
+    // Frame 0x612: V_9, V_10, V_out, I_out
+    memset(payload, 0, 8);
+    encodeBE(payload, 0, (int16_t)(V[8] * 10));
+    encodeBE(payload, 2, (int16_t)(V[9] * 10));
+    encodeBE(payload, 4, (int16_t)(V_out * 10));
+    encodeBE(payload, 6, (int16_t)(I_out * 10));
+    broadcastData(0x612, payload, 8);
   }
 }

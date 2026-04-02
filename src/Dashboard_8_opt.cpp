@@ -27,7 +27,6 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 // =========================================================================
 // --- CUSTOM BOOT LOGOS ---
 // =========================================================================
-// Paste your entire generated array for image 2 here:
 static const unsigned char PROGMEM SZEngine_logo[984] = {
   0x00,0x80,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x01,0x00,
   0x00,0xE0,0xFC,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x03,0x00,
@@ -142,8 +141,11 @@ static const unsigned char PROGMEM SZEngine_title[756] = {
   0xFE,0xFF,0xFF,0xE7,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x0F,0x00,0x80,0xFF,0xF8,0xFF,0xFF,0xCF,0x3F,0x00,0x00,0xFF,0xF3,0xFF,0xFF,0x01,0x00,
   0xFF,0xFF,0xFF,0xF3,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x0F,0x00,0x80,0x7F,0xFC,0xFF,0xFF,0xE7,0x1F,0x00,0x00,0xFE,0xF1,0xFF,0xFF,0x00,0x00
 };
+
 // --- DYNAMIC DATA VARIABLES ---
 volatile int activeScreen = 1; 
+
+// Existing Screen 1 & 2 Variables
 volatile float oilTemp = 85.0; 
 volatile float oilPress = 4.0; 
 volatile float engineWaterTemp = 88.0; 
@@ -158,6 +160,17 @@ volatile float hybridVolts = 36.0;
 volatile int currentGear = 0; 
 volatile int stateOfCharge = 80; 
 volatile int rpm = 0;
+
+// New Screen 3 Variables (Temperatures)
+volatile float T_1 = 0.0, T_2 = 0.0, T_3 = 0.0, T_4 = 0.0;
+volatile float T_5 = 0.0, T_6 = 0.0, T_7 = 0.0, T_8 = 0.0;
+volatile float T_9 = 0.0, T_10 = 0.0, T_11 = 0.0, T_12 = 0.0;
+
+// New Screen 4 Variables (Voltages / Current)
+volatile float V_1 = 0.0, V_2 = 0.0, V_3 = 0.0, V_4 = 0.0; 
+volatile float V_5 = 0.0, V_6 = 0.0, V_7 = 0.0, V_8 = 0.0;
+volatile float V_9 = 0.0, V_10 = 0.0, V_out = 0.0, I_out = 0.0;
+
 
 // --- SETTINGS & TIMERS ---
 int rpmStart = 4000; 
@@ -212,6 +225,45 @@ void TaskCANcode(void * pvParameters) {
           memcpy((void*)&hybridVolts, &rx_msg.data[0], 4); 
           stateOfCharge = rx_msg.data[5]; 
           activeScreen = rx_msg.data[6]; 
+          break;
+
+        // --- NEW DATA PACKETS FOR SCREENS 3 & 4 ---
+        // (Mock IDs: Update these to match your actual module's protocol)
+        case 0x600:
+          T_1 = parseBE(rx_msg.data, 0) * 0.1;
+          T_2 = parseBE(rx_msg.data, 2) * 0.1;
+          T_3 = parseBE(rx_msg.data, 4) * 0.1;
+          T_4 = parseBE(rx_msg.data, 6) * 0.1;
+          break;
+        case 0x601:
+          T_5 = parseBE(rx_msg.data, 0) * 0.1;
+          T_6 = parseBE(rx_msg.data, 2) * 0.1;
+          T_7 = parseBE(rx_msg.data, 4) * 0.1;
+          T_8 = parseBE(rx_msg.data, 6) * 0.1;
+          break;
+        case 0x602:
+          T_9 = parseBE(rx_msg.data, 0) * 0.1;
+          T_10 = parseBE(rx_msg.data, 2) * 0.1;
+          T_11 = parseBE(rx_msg.data, 4) * 0.1;
+          T_12 = parseBE(rx_msg.data, 6) * 0.1;
+          break;
+        case 0x610:
+          V_1 = parseBE(rx_msg.data, 0) * 0.1;
+          V_2 = parseBE(rx_msg.data, 2) * 0.1;
+          V_3 = parseBE(rx_msg.data, 4) * 0.1;
+          V_4 = parseBE(rx_msg.data, 6) * 0.1;
+          break;
+        case 0x611:
+          V_5 = parseBE(rx_msg.data, 0) * 0.1;
+          V_6 = parseBE(rx_msg.data, 2) * 0.1;
+          V_7 = parseBE(rx_msg.data, 4) * 0.1;
+          V_8 = parseBE(rx_msg.data, 6) * 0.1;
+          break;
+        case 0x612:
+          V_9 = parseBE(rx_msg.data, 0) * 0.1;
+          V_10 = parseBE(rx_msg.data, 2) * 0.1;
+          V_out = parseBE(rx_msg.data, 4) * 0.1;
+          I_out = parseBE(rx_msg.data, 6) * 0.1;
           break;
       }
     }
@@ -268,6 +320,7 @@ void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float ma
   }
 }
 
+// --- SCREEN 1: GAUGES ---
 void drawScreen1() {
   char textBuffer[32]; 
   u8g2.setFont(u8g2_font_logisoso92_tn); 
@@ -345,6 +398,112 @@ void drawScreen2() {
   snprintf(textBuffer, sizeof(textBuffer), "%d", currentGear); u8g2.drawStr(205, 120, textBuffer);
 }
 
+// --- SCREEN 3: TEMPERATURES ---
+void drawScreen3() {
+  char textBuffer[16];
+  u8g2.setFontMode(1);
+  u8g2.setBitmapMode(1);
+  
+  // Grid Lines
+  u8g2.drawLine(119, 1, 119, 127);
+  u8g2.drawLine(1, 42, 240, 42);
+  u8g2.drawLine(0, 84, 240, 84);
+  u8g2.drawLine(59, 1, 59, 128);
+  u8g2.drawLine(180, 0, 180, 128);
+
+  // Row 1
+  u8g2.setFont(u8g2_font_t0_16b_tr);
+  u8g2.drawStr(15, 11, "T_1");
+  u8g2.drawStr(77, 11, "T_2");
+  u8g2.drawStr(134, 11, "T_3");
+  u8g2.drawStr(199, 11, "T_4");
+
+  u8g2.setFont(u8g2_font_profont22_tr);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_1); u8g2.drawStr(0, 33, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_2); u8g2.drawStr(60, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_3); u8g2.drawStr(121, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_4); u8g2.drawStr(182, 35, textBuffer);
+
+  // Row 2
+  u8g2.setFont(u8g2_font_t0_16b_tr);
+  u8g2.drawStr(15, 56, "T_5");
+  u8g2.drawStr(77, 56, "T_6");
+  u8g2.drawStr(135, 56, "T_7");
+  u8g2.drawStr(199, 55, "T_8");
+
+  u8g2.setFont(u8g2_font_profont22_tr);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_5); u8g2.drawStr(0, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_6); u8g2.drawStr(61, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_7); u8g2.drawStr(121, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_8); u8g2.drawStr(182, 77, textBuffer);
+
+  // Row 3
+  u8g2.setFont(u8g2_font_t0_16b_tr);
+  u8g2.drawStr(15, 97, "T_9");
+  u8g2.drawStr(73, 97, "T_10");
+  u8g2.drawStr(130, 97, "T_11");
+  u8g2.drawStr(192, 97, "T_12");
+
+  u8g2.setFont(u8g2_font_profont22_tr);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_9); u8g2.drawStr(0, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_10); u8g2.drawStr(60, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_11); u8g2.drawStr(121, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_12); u8g2.drawStr(182, 121, textBuffer);
+}
+
+// --- SCREEN 4: VOLTAGES ---
+void drawScreen4() {
+  char textBuffer[16];
+  u8g2.setFontMode(1);
+  u8g2.setBitmapMode(1);
+  
+  // Grid Lines
+  u8g2.drawLine(119, 0, 119, 127);
+  u8g2.drawLine(1, 42, 240, 42);
+  u8g2.drawLine(0, 84, 240, 84);
+  u8g2.drawLine(59, 0, 59, 127);
+  u8g2.drawLine(180, 0, 180, 128);
+
+  // Row 1
+  u8g2.setFont(u8g2_font_t0_16b_tr);
+  u8g2.drawStr(15, 11, "V_1");
+  u8g2.drawStr(77, 11, "V_2");
+  u8g2.drawStr(134, 11, "V_3");
+  u8g2.drawStr(199, 11, "V_4");
+
+  u8g2.setFont(u8g2_font_profont22_tr);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_1); u8g2.drawStr(0, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_2); u8g2.drawStr(60, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_3); u8g2.drawStr(121, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_4); u8g2.drawStr(182, 35, textBuffer);
+
+  // Row 2
+  u8g2.setFont(u8g2_font_t0_16b_tr);
+  u8g2.drawStr(15, 56, "V_5");
+  u8g2.drawStr(76, 56, "V_6");
+  u8g2.drawStr(135, 56, "V_7");
+  u8g2.drawStr(198, 55, "V_8");
+
+  u8g2.setFont(u8g2_font_profont22_tr);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_5); u8g2.drawStr(0, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_6); u8g2.drawStr(61, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_7); u8g2.drawStr(121, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_8); u8g2.drawStr(182, 77, textBuffer);
+
+  // Row 3
+  u8g2.setFont(u8g2_font_t0_16b_tr);
+  u8g2.drawStr(14, 97, "V_9");
+  u8g2.drawStr(74, 97, "V_10");
+  u8g2.drawStr(130, 97, "V_out");
+  u8g2.drawStr(190, 97, "I_out");
+
+  u8g2.setFont(u8g2_font_profont22_tr);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_9); u8g2.drawStr(0, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_10); u8g2.drawStr(60, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_out); u8g2.drawStr(121, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", I_out); u8g2.drawStr(182, 121, textBuffer); 
+}
+
 
 void setup() {
   Serial.begin(115200); 
@@ -399,8 +558,6 @@ void setup() {
 
 void loop() {
   // --- CORE 1: DECOUPLED 30 FPS RENDER ENGINE ---
-  // Notice there is NO CAN parsing here anymore! Core 0 handles all of it.
-  
   if (millis() - lastScreenUpdate >= 33) {
     lastScreenUpdate = millis();
 
@@ -411,6 +568,10 @@ void loop() {
       drawScreen1(); 
     } else if (activeScreen == 2) {
       drawScreen2();
+    } else if (activeScreen == 3) {
+      drawScreen3();
+    } else if (activeScreen == 4) {
+      drawScreen4();
     }
     
     u8g2.sendBuffer();          
