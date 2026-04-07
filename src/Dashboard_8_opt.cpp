@@ -15,7 +15,6 @@
 #define SPI_DC    9
 #define SPI_RESET 8
 #define BACKLIGHT_PIN 4
-
 #define CAN_TX_PIN 47
 #define CAN_RX_PIN 48
 #define LED_PIN 7
@@ -24,9 +23,7 @@
 U8G2_UC1611_EA_DOGXL240_F_4W_SW_SPI u8g2(U8G2_R2, SPI_SCK, SPI_MOSI, SPI_CS, SPI_DC, SPI_RESET);
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-// =========================================================================
-// --- CUSTOM BOOT LOGOS ---
-// =========================================================================
+// --- BOOT LOGOS ---
 static const unsigned char PROGMEM SZEngine_logo[984] = {
   0x00,0x80,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x01,0x00,
   0x00,0xE0,0xFC,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x03,0x00,
@@ -142,34 +139,32 @@ static const unsigned char PROGMEM SZEngine_title[756] = {
   0xFF,0xFF,0xFF,0xF3,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x0F,0x00,0x80,0x7F,0xFC,0xFF,0xFF,0xE7,0x1F,0x00,0x00,0xFE,0xF1,0xFF,0xFF,0x00,0x00
 };
 
-// --- DYNAMIC DATA VARIABLES ---
+// --- VARIABLES ---
 volatile int activeScreen = 1; 
 
-// Existing Screen 1 & 2 Variables
-volatile float oilTemp = 85.0; 
-volatile float oilPress = 4.0; 
-volatile float engineWaterTemp = 88.0; 
-volatile float icWaterTemp = 35.0;
-volatile float lambdaVal = 1.00; 
-volatile float intakeTemp = 35.0; 
-volatile float egt = 450.0; 
-volatile float batteryVolts = 13.8;
-volatile float boostPressure = 0.0; 
-volatile float hybridTemp = 25.0; 
-volatile float hybridVolts = 36.0;
-volatile int currentGear = 0; 
-volatile int stateOfCharge = 80; 
-volatile int rpm = 0;
-
-// New Screen 3 Variables (Temperatures)
-volatile float T_1 = 0.0, T_2 = 0.0, T_3 = 0.0, T_4 = 0.0;
-volatile float T_5 = 0.0, T_6 = 0.0, T_7 = 0.0, T_8 = 0.0;
-volatile float T_9 = 0.0, T_10 = 0.0, T_11 = 0.0, T_12 = 0.0;
-
-// New Screen 4 Variables (Voltages / Current)
-volatile float V_1 = 0.0, V_2 = 0.0, V_3 = 0.0, V_4 = 0.0; 
-volatile float V_5 = 0.0, V_6 = 0.0, V_7 = 0.0, V_8 = 0.0;
-volatile float V_9 = 0.0, V_10 = 0.0, V_out = 0.0, I_out = 0.0;
+// Screen 1 & 2
+volatile float oilTemp = 97.0;
+volatile float oilPress = 2.4;
+volatile float engineWaterTemp = 89.8;
+volatile float icWaterTemp = 69.0;
+volatile float lambdaVal = 0.98;
+volatile float intakeTemp = 43.8;
+volatile float egt = 490.0;
+volatile float batteryVolts = 13.3;
+volatile float boostPressure = 0.3;
+volatile float hybridTemp = 26.34;
+volatile float hybridVolts = 39.6;
+volatile int currentGear = 0;
+volatile int stateOfCharge = 400;
+volatile int rpm = 4000;
+// Screen 3
+volatile float T_1 = 26.02, T_2 = 25.94, T_3 = 25.86, T_4 = 25.88;
+volatile float T_5 = 25.82, T_6 = 26.17, T_7 = 25.94, T_8 = 26.34;
+volatile float T_9 = 25.73, T_10 = 26.09, T_11 = 25.61, T_12 = 26.42;
+// Screen 4
+volatile float V_1 = 4.13, V_2 = 4.14, V_3 = 4.15, V_4 = 4.16;
+volatile float V_5 = 4.17, V_6 = 4.18, V_7 = 4.19, V_8 = 4.13;
+volatile float V_9 = 4.20, V_10 = 4.20, V_out = 41.85, I_out = 0.0;
 
 
 // --- SETTINGS & TIMERS ---
@@ -187,14 +182,12 @@ int16_t parseBE(uint8_t* data, int offset) { return (data[offset] << 8) | data[o
 // --- CORE 0: DEDICATED CAN BUS TASK ---
 // =========================================================================
 void TaskCANcode(void * pvParameters) {
-  Serial.print("CAN Task Successfully Booted on Core: ");
-  Serial.println(xPortGetCoreID());
+  //Serial.print("CAN Task Successfully Booted on Core: ");
+  //Serial.println(xPortGetCoreID());
 
   for(;;) { // Infinite FreeRTOS Loop
     twai_message_t rx_msg;
     
-    // pdMS_TO_TICKS(1) forces Core 0 to yield for 1ms if the queue is empty, 
-    // preventing the ESP32 Watchdog Timer from crashing the chip.
     while (twai_receive(&rx_msg, pdMS_TO_TICKS(1)) == ESP_OK) {
       switch (rx_msg.identifier) {
         case 0x520: 
@@ -227,8 +220,6 @@ void TaskCANcode(void * pvParameters) {
           activeScreen = rx_msg.data[6]; 
           break;
 
-        // --- NEW DATA PACKETS FOR SCREENS 3 & 4 ---
-        // (Mock IDs: Update these to match your actual module's protocol)
         case 0x600:
           T_1 = parseBE(rx_msg.data, 0) * 0.1;
           T_2 = parseBE(rx_msg.data, 2) * 0.1;
@@ -276,10 +267,10 @@ void TaskCANcode(void * pvParameters) {
 
 void updateLEDs() {
   int numLedsToLight = 0;
-  bool revLimiter = false;
+  bool redline = false;
 
   if (rpm >= rpmMax) {
-    revLimiter = true;
+    redline = true;
   } else if (rpm >= rpmStart) {
     numLedsToLight = (int)((rpm - rpmStart) * NUM_LEDS / (float)(rpmMax - rpmStart)) + 1;
     if (numLedsToLight > NUM_LEDS) numLedsToLight = NUM_LEDS;
@@ -287,7 +278,7 @@ void updateLEDs() {
 
   strip.clear(); 
 
-  if (revLimiter) {
+  if (redline) {
     if ((millis() / 50) % 2 == 0) {
       for(int i = 0; i < NUM_LEDS; i++) {
         strip.setPixelColor(i, strip.Color(0, 0, 255));
@@ -320,7 +311,7 @@ void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float ma
   }
 }
 
-// --- SCREEN 1: GAUGES ---
+// --- SCREEN 1 ---
 void drawScreen1() {
   char textBuffer[32]; 
   u8g2.setFont(u8g2_font_logisoso92_tn); 
@@ -350,22 +341,23 @@ void drawScreen1() {
   drawGauge(50, 70, 40, 10, 0.0, 2.5, boostPressure);
 }
 
-// --- SCREEN 2: WARM-UP ---
+// --- SCREEN 2 ---
 void drawScreen2() {
   char textBuffer[16];
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
-  u8g2.drawLine(120, 0, 120, 128);
-  u8g2.drawLine(0, 42, 240, 42);
-  u8g2.drawLine(0, 84, 240, 84);
-  u8g2.drawLine(60, 0, 60, 128);
-  u8g2.drawLine(180, 0, 180, 128);
+
+  u8g2.drawLine(0, 42, 239, 42);
+  u8g2.drawLine(0, 84, 239, 84);
+  u8g2.drawLine(59, 0, 59, 127);
+  u8g2.drawLine(119, 0, 119, 127);
+  u8g2.drawLine(180, 0, 180, 127);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(8, 11, "Oil T");
-  u8g2.drawStr(68, 11, "Oil P");
-  u8g2.drawStr(122, 11, "EWaterT");
-  u8g2.drawStr(183, 12, "IWaterT");
+  u8g2.drawStr(8, 15, "Oil T");
+  u8g2.drawStr(68, 15, "Oil P");
+  u8g2.drawStr(122, 15, "EWaterT");
+  u8g2.drawStr(183, 15, "IWaterT");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", oilTemp); u8g2.drawStr(5, 35, textBuffer);
@@ -374,10 +366,10 @@ void drawScreen2() {
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", icWaterTemp); u8g2.drawStr(187, 35, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(4, 56, "Lambda");
-  u8g2.drawStr(61, 56, "IntakeT");
-  u8g2.drawStr(135, 56, "EGT");
-  u8g2.drawStr(183, 56, "Battery");
+  u8g2.drawStr(4, 58, "Lambda");
+  u8g2.drawStr(61, 58, "IntakeT");
+  u8g2.drawStr(135, 58, "EGT");
+  u8g2.drawStr(183, 58, "Battery");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", lambdaVal); u8g2.drawStr(4, 77, textBuffer);
@@ -386,10 +378,10 @@ void drawScreen2() {
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", batteryVolts); u8g2.drawStr(182, 77, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(4, 99, "Boost");
-  u8g2.drawStr(62, 99, "HybridT");
-  u8g2.drawStr(123, 99, "HybridV");
-  u8g2.drawStr(195, 99, "Gear");
+  u8g2.drawStr(4, 100, "Boost");
+  u8g2.drawStr(62, 100, "HybridT");
+  u8g2.drawStr(123, 100, "HybridV");
+  u8g2.drawStr(195, 100, "Gear");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", boostPressure); u8g2.drawStr(4, 120, textBuffer);
@@ -398,38 +390,35 @@ void drawScreen2() {
   snprintf(textBuffer, sizeof(textBuffer), "%d", currentGear); u8g2.drawStr(205, 120, textBuffer);
 }
 
-// --- SCREEN 3: TEMPERATURES ---
+// --- SCREEN 3 ---
 void drawScreen3() {
   char textBuffer[16];
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
   
-  // Grid Lines
-  u8g2.drawLine(119, 1, 119, 127);
-  u8g2.drawLine(1, 42, 240, 42);
-  u8g2.drawLine(0, 84, 240, 84);
-  u8g2.drawLine(59, 1, 59, 128);
-  u8g2.drawLine(180, 0, 180, 128);
+  u8g2.drawLine(0, 42, 239, 42);
+  u8g2.drawLine(0, 84, 239, 84);
+  u8g2.drawLine(59, 0, 59, 127);
+  u8g2.drawLine(119, 0, 119, 127);
+  u8g2.drawLine(180, 0, 180, 127);
 
-  // Row 1
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 11, "T_1");
-  u8g2.drawStr(77, 11, "T_2");
-  u8g2.drawStr(134, 11, "T_3");
-  u8g2.drawStr(199, 11, "T_4");
+  u8g2.drawStr(15, 15, "T_1");
+  u8g2.drawStr(77, 15, "T_2");
+  u8g2.drawStr(134, 15, "T_3");
+  u8g2.drawStr(199, 15, "T_4");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_1); u8g2.drawStr(0, 33, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_1); u8g2.drawStr(0, 35, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_2); u8g2.drawStr(60, 35, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_3); u8g2.drawStr(121, 35, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_4); u8g2.drawStr(182, 35, textBuffer);
 
-  // Row 2
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 56, "T_5");
-  u8g2.drawStr(77, 56, "T_6");
-  u8g2.drawStr(135, 56, "T_7");
-  u8g2.drawStr(199, 55, "T_8");
+  u8g2.drawStr(15, 58, "T_5");
+  u8g2.drawStr(77, 58, "T_6");
+  u8g2.drawStr(135, 58, "T_7");
+  u8g2.drawStr(199, 58, "T_8");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_5); u8g2.drawStr(0, 77, textBuffer);
@@ -451,38 +440,35 @@ void drawScreen3() {
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_12); u8g2.drawStr(182, 121, textBuffer);
 }
 
-// --- SCREEN 4: VOLTAGES ---
+// --- SCREEN 4 ---
 void drawScreen4() {
   char textBuffer[16];
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
   
-  // Grid Lines
-  u8g2.drawLine(119, 0, 119, 127);
-  u8g2.drawLine(1, 42, 240, 42);
-  u8g2.drawLine(0, 84, 240, 84);
+  u8g2.drawLine(0, 42, 239, 42);
+  u8g2.drawLine(0, 84, 239, 84);
   u8g2.drawLine(59, 0, 59, 127);
-  u8g2.drawLine(180, 0, 180, 128);
+  u8g2.drawLine(119, 0, 119, 127);
+  u8g2.drawLine(180, 0, 180, 127);
 
-  // Row 1
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 11, "V_1");
-  u8g2.drawStr(77, 11, "V_2");
-  u8g2.drawStr(134, 11, "V_3");
-  u8g2.drawStr(199, 11, "V_4");
+  u8g2.drawStr(15, 15, "V_1");
+  u8g2.drawStr(77, 15, "V_2");
+  u8g2.drawStr(138, 15, "V_3");
+  u8g2.drawStr(199, 15, "V_4");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_1); u8g2.drawStr(0, 35, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_2); u8g2.drawStr(60, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_2); u8g2.drawStr(61, 35, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_3); u8g2.drawStr(121, 35, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_4); u8g2.drawStr(182, 35, textBuffer);
 
-  // Row 2
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 56, "V_5");
-  u8g2.drawStr(76, 56, "V_6");
-  u8g2.drawStr(135, 56, "V_7");
-  u8g2.drawStr(198, 55, "V_8");
+  u8g2.drawStr(15, 58, "V_5");
+  u8g2.drawStr(77, 58, "V_6");
+  u8g2.drawStr(138, 58, "V_7");
+  u8g2.drawStr(199, 58, "V_8");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_5); u8g2.drawStr(0, 77, textBuffer);
@@ -490,24 +476,23 @@ void drawScreen4() {
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_7); u8g2.drawStr(121, 77, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_8); u8g2.drawStr(182, 77, textBuffer);
 
-  // Row 3
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(14, 97, "V_9");
-  u8g2.drawStr(74, 97, "V_10");
-  u8g2.drawStr(130, 97, "V_out");
-  u8g2.drawStr(190, 97, "I_out");
+  u8g2.drawStr(15, 100, "V_9");
+  u8g2.drawStr(74, 100, "V_10");
+  u8g2.drawStr(131, 100, "V_out");
+  u8g2.drawStr(192, 100, "I_out");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_9); u8g2.drawStr(0, 121, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_10); u8g2.drawStr(60, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_10); u8g2.drawStr(61, 121, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_out); u8g2.drawStr(121, 121, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", I_out); u8g2.drawStr(182, 121, textBuffer); 
 }
 
 
 void setup() {
-  Serial.begin(115200); 
-  delay(1000); 
+  //Serial.begin(115200); 
+  delay(500); 
   
   pinMode(BACKLIGHT_PIN, OUTPUT); 
   digitalWrite(BACKLIGHT_PIN, HIGH); 
@@ -520,16 +505,13 @@ void setup() {
   u8g2.begin(); 
   u8g2.setContrast(150); 
   
-  // --- HARDWARE TEST: Flash Red at Boot with Screen Display ---
   u8g2.clearBuffer();
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
   u8g2.drawXBM(73, 10, 94, 82, SZEngine_logo);
   u8g2.drawXBM(10, 100, 221, 27, SZEngine_title);
   u8g2.sendBuffer();
-  
-  // Flash red LEDs
-  strip.fill(strip.Color(255, 0, 0), 0, NUM_LEDS);  // Red
+  strip.fill(strip.Color(255, 0, 0), 0, NUM_LEDS);
   strip.show();
   delay(3000);
   strip.clear();
@@ -542,22 +524,22 @@ void setup() {
   
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
     twai_start();
-    Serial.println("CAN Started Successfully!");
+    //Serial.println("CAN Started Successfully!");
   }
 
-  // --- IGNITE CORE 0 ---
+  // --- Start CORE 0 ---
   xTaskCreatePinnedToCore(
     TaskCANcode,   /* Task function */
     "TaskCAN",     /* Name of task */
-    4096,          /* Stack size of task (4KB is plenty) */
+    4096,          /* Stack size of task */
     NULL,          /* Parameter of the task */
-    10,            /* Priority of the task (High Priority) */
+    10,            /* Priority of the task */
     &TaskCAN,      /* Task handle */
     0);            /* Pin task to core 0 */
 }
 
 void loop() {
-  // --- CORE 1: DECOUPLED 30 FPS RENDER ENGINE ---
+  // --- CORE 1: Screen render ---
   if (millis() - lastScreenUpdate >= 33) {
     lastScreenUpdate = millis();
 

@@ -9,29 +9,22 @@ import sys
 COM_PORT = 'COM9'
 BAUD_RATE = 115200
 CSV_FILENAME = 'FSAA_Endu_log_2023-08-26_levi_for_dash.csv'
-UPDATE_RATE_HZ = 20  # 20 updates per second (50ms delay)
+UPDATE_RATE_HZ = 20
 
 # ==========================================
-# --- 2. EXACT CSV COLUMN MAPPING ---
+# --- 2. CSV COLUMN MAPPING ---
 # ==========================================
 COLUMN_MAP = {
     "RPM": "RPM [61]",
     "G": "VSS Gear [90]",
-    "BP": "MAP [20]",                  # Script will divide this by 100 to convert kPa to Bar!
+    "BP": "MAP [20]",
     "OT": "Engine Oil Temp [805]",
     "OP": "Engine Oil Pressure [804]",
     "EWT": "Coolant temp [18]",
     "L": "Lambda [5]",
     "IT": "Intake air temp [17]",
-    "EGT": "EGT 1  [128]",             # Note: exact spacing from your list
+    "EGT": "EGT 1  [128]",
     "BV": "Battery voltage [21]",
-    
-    # --- CUSTOM HYBRID SENSORS ---
-    # Replace None with your specific "User AIN... []" or "User CAN... []" strings if you have them!
-    "IWT": None, 
-    "HT": None,  
-    "HV": None,  
-    "SoC": None  
 }
 
 # ==========================================
@@ -65,32 +58,27 @@ def main():
                             try:
                                 val_float = float(val_str)
                                 
-                                # --- AUTOMATIC kPa to Bar CONVERSION ---
                                 if prefix == "BP":
-                                    # 100 kPa = 1 Bar Absolute
                                     val_float = val_float / 100.0
                                     
-                                    # Optional: If you want to display Gauge Boost (0 = atmosphere) 
+                                    # Optional: Display Gauge Boost (0 = atmosphere) 
                                     # instead of Absolute (1 = atmosphere), uncomment the line below:
                                     # val_float = val_float - 1.0 
                                     # if val_float < 0: val_float = 0.0
                                 
-                                # Format numbers to keep Serial traffic light & fast
                                 if prefix in ["RPM", "G", "SoC"]:
-                                    val_formatted = str(int(val_float)) # No decimals
+                                    val_formatted = str(int(val_float))
                                 else:
-                                    val_formatted = f"{val_float:.2f}"  # 2 decimals max
+                                    val_formatted = f"{val_float:.2f}"
 
                                 commands_to_send.append(f"{prefix}{val_formatted}\n")
                                 
-                                # Only print a few vital stats to the terminal so it doesn't lag
                                 if prefix in ['RPM', 'G', 'BP', 'OT']:
                                     print_output.append(f"{prefix}: {val_formatted}")
                             
                             except ValueError:
-                                pass # Skip corrupted data or text
+                                pass
 
-                # Blast the commands over Serial to the Dashboard
                 if commands_to_send:
                     for cmd in commands_to_send:
                         ser.write(cmd.encode('utf-8'))

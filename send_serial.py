@@ -1,6 +1,6 @@
 import serial
 
-port = "COM9"  # Change to your port
+port = "COM9"
 baud = 115200
 
 try:

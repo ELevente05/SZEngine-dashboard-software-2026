@@ -12,24 +12,25 @@
 #define CAN_TX_PIN 47
 #define CAN_RX_PIN 48
 
-// --- DYNAMIC DATA VARIABLES ---
-float oilTemp = 85.0; 
-float oilPress = 4.0;     // Stored in Bar
-float engineWaterTemp = 88.0; 
+// --- VARIABLES ---
+// Screen 1 & 2
+float oilTemp = 85.0;
+float oilPress = 4.0;
+float engineWaterTemp = 88.0;
 float icWaterTemp = 35.0;
-float lambdaVal = 1.00; 
-float intakeTemp = 35.0; 
-float egt = 450.0; 
+float lambdaVal = 1.00;
+float intakeTemp = 35.0;
+float egt = 450.0;
 float batteryVolts = 13.8;
-float boostPressure = 0.0; 
-float hybridTemp = 25.0; 
+float boostPressure = 0.0;
+float hybridTemp = 25.0;
 float hybridVolts = 36.0;
-int currentGear = 0; 
-int stateOfCharge = 80; 
-int activeScreen = 1; 
+int currentGear = 0;
+int stateOfCharge = 80;
+int activeScreen = 1;
 int rpm = 0;
 
-// New Arrays for Screens 3 & 4
+// Screens 3 & 4
 float T[12] = {0.0};  // T_1 to T_12
 float V[10] = {0.0};  // V_1 to V_10
 float V_out = 0.0;
@@ -76,12 +77,11 @@ void setup() {
   }
 }
 
-// --- HIGH SPEED SERIAL PARSER ---
+// --- SERIAL PARSER ---
 void processCommand(char* cmd) {
   int idx;
   float fval;
 
-  // Screen & General Engine Params
   if (cmd[0] == 'C') activeScreen = atoi(&cmd[1]);
   else if (strncmp(cmd, "RPM", 3) == 0) rpm = atoi(&cmd[3]);
   else if (strncmp(cmd, "EWT", 3) == 0) engineWaterTemp = atof(&cmd[3]);
@@ -97,8 +97,6 @@ void processCommand(char* cmd) {
   else if (strncmp(cmd, "HV", 2) == 0) hybridVolts = atof(&cmd[2]);
   else if (strncmp(cmd, "L", 1) == 0 && !isalpha(cmd[1])) lambdaVal = atof(&cmd[1]);
   else if (strncmp(cmd, "G", 1) == 0) currentGear = atoi(&cmd[1]);
-  
-  // New: Screen 3 & 4 Parse Logic
   else if (strncmp(cmd, "VOUT=", 5) == 0) V_out = atof(&cmd[5]);
   else if (strncmp(cmd, "IOUT=", 5) == 0) I_out = atof(&cmd[5]);
   else if (sscanf(cmd, "T%d=%f", &idx, &fval) == 2) {
@@ -111,7 +109,7 @@ void processCommand(char* cmd) {
 
 void loop() {
   
-  // --- 1. NON-BLOCKING SERIAL INGESTION ---
+  // --- 1. SERIAL INGESTION ---
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n') {
@@ -156,28 +154,25 @@ void loop() {
     broadcastData(0x536, payload, 8);
 
 
-    // --- CUSTOM FLOAT FRAMES ---
+    // --- CUSTOM FRAMES ---
     
-    // Frame 0x101: Custom IC Water Temp
+    // Frame 0x101: IC Water Temp
     memset(payload, 0, 8);
     memcpy(&payload[4], &icWaterTemp, 4);
     broadcastData(0x101, payload, 8);
 
-    // Frame 0x104: Custom Boost Pressure & Hybrid Temp
+    // Frame 0x104: Boost Pressure & Hybrid Temp
     memset(payload, 0, 8);
     memcpy(&payload[0], &boostPressure, 4); 
     memcpy(&payload[4], &hybridTemp, 4);
     broadcastData(0x104, payload, 8);
 
-    // Frame 0x105: Custom Hybrid Volts, SoC, Screen State
+    // Frame 0x105: Hybrid Volts, SoC, Screen State
     memset(payload, 0, 8);
     memcpy(&payload[0], &hybridVolts, 4);
     payload[5] = (uint8_t)stateOfCharge;
     payload[6] = (uint8_t)activeScreen;
     broadcastData(0x105, payload, 7); 
-
-
-    // --- NEW TEMPERATURE FRAMES (Multiplying by 10 to match receiver's * 0.1 factor) ---
     
     // Frame 0x600: T_1 to T_4
     memset(payload, 0, 8);
@@ -202,8 +197,6 @@ void loop() {
     encodeBE(payload, 4, (int16_t)(T[10] * 10));
     encodeBE(payload, 6, (int16_t)(T[11] * 10));
     broadcastData(0x602, payload, 8);
-
-    // --- NEW VOLTAGE & CURRENT FRAMES ---
 
     // Frame 0x610: V_1 to V_4
     memset(payload, 0, 8);
