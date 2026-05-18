@@ -13,27 +13,28 @@
 #define CAN_RX_PIN 48
 
 // --- VARIABLES ---
+int activeScreen = 1; 
+
 // Screen 1 & 2
-float oilTemp = 85.0;
-float oilPress = 4.0;
-float engineWaterTemp = 88.0;
-float icWaterTemp = 35.0;
-float lambdaVal = 1.00;
-float intakeTemp = 35.0;
-float egt = 450.0;
-float batteryVolts = 13.8;
-float boostPressure = 0.0;
-float hybridTemp = 25.0;
-float hybridVolts = 36.0;
+float oilTemp = 97.0;
+float oilPress = 2.4;
+float engineWaterTemp = 89.8;
+float icWaterTemp = 69.0;
+float lambdaVal = 0.98;
+float intakeTemp = 43.8;
+float egt = 490.0;
+float batteryVolts = 13.3;
+float boostPressure = 0.3;
+float hybridTemp = 26.34;
+float hybridVolts = 39.6;
 int currentGear = 0;
-int stateOfCharge = 80;
-int activeScreen = 1;
-int rpm = 0;
+int stateOfCharge = 400;
+int rpm = 4000;
 
 // Screens 3 & 4
-float T[12] = {0.0};  // T_1 to T_12
+float T[16] = {0.0};  // T_1 to T_16
 float V[10] = {0.0};  // V_1 to V_10
-float V_out = 0.0;
+float V_out = 41.9;
 float I_out = 0.0;
 
 // --- SERIAL & TIMING ---
@@ -65,7 +66,7 @@ void setup() {
   Serial.begin(115200); 
   delay(1000); 
 
-  Serial.println("HUB NODE READY: Listening for Python Telemetry...");
+  Serial.println("HUB NODE READY");
   
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
   g_config.tx_queue_len = 20; // 20-message queue to handle 20Hz bursts

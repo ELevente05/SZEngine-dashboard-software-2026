@@ -184,8 +184,8 @@ int16_t parseBE(uint8_t* data, int offset) { return (data[offset] << 8) | data[o
 // --- CORE 0: DEDICATED CAN BUS TASK ---
 // =========================================================================
 void TaskCANcode(void * pvParameters) {
-  //Serial.print("CAN Task Successfully Booted on Core: ");
-  //Serial.println(xPortGetCoreID());
+  Serial.print("CAN Task Successfully Booted on Core: ");
+  Serial.println(xPortGetCoreID());
 
   for(;;) { // Infinite FreeRTOS Loop
     twai_message_t rx_msg;
@@ -194,7 +194,6 @@ void TaskCANcode(void * pvParameters) {
       switch (rx_msg.identifier) {
         case 0x520: 
           rpm = parseBE(rx_msg.data, 0); 
-          boostPressure = parseBE(rx_msg.data, 4) * 0.001;
           lambdaVal = parseBE(rx_msg.data, 6) * 0.001; 
           break;
         case 0x530: 
@@ -213,11 +212,11 @@ void TaskCANcode(void * pvParameters) {
         case 0x101: 
           memcpy((void*)&icWaterTemp, &rx_msg.data[4], 4); 
           break;
-        case 0x102: 
-          //memcpy((void*)&boostPressure, &rx_msg.data[0], 4); 
+        case 0x104: 
+          memcpy((void*)&boostPressure, &rx_msg.data[0], 4); 
           memcpy((void*)&hybridTemp, &rx_msg.data[4], 4); 
           break;
-        case 0x103: 
+        case 0x105: 
           memcpy((void*)&hybridVolts, &rx_msg.data[0], 4); 
           stateOfCharge = rx_msg.data[5]; 
           activeScreen = rx_msg.data[6]; 
@@ -514,7 +513,7 @@ void drawScreen4() {
 
 
 void setup() {
-  //Serial.begin(115200); 
+  Serial.begin(115200); 
   delay(500); 
   
   pinMode(BACKLIGHT_PIN, OUTPUT); 
@@ -547,7 +546,7 @@ void setup() {
   
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
     twai_start();
-    //Serial.println("CAN Started Successfully!");
+    Serial.println("CAN Started Successfully!");
   }
 
   // --- Start CORE 0 ---
@@ -562,6 +561,33 @@ void setup() {
 }
 
 void loop() {
+    if (Serial.available()) {
+    String input = Serial.readStringUntil('\n');
+    input.trim(); 
+    
+    if (input.startsWith("C")) {
+      int desiredScreen = input.substring(1).toInt();
+      if (desiredScreen == 1 || desiredScreen == 2) {
+        activeScreen = desiredScreen;
+        Serial.print("Switched to screen: "); 
+        Serial.println(activeScreen);
+      }
+    }
+    
+    else if (input.startsWith("OT")) oilTemp = input.substring(2).toFloat();
+    else if (input.startsWith("OP")) oilPress = input.substring(2).toFloat();
+    else if (input.startsWith("EWT")) engineWaterTemp = input.substring(3).toFloat();
+    else if (input.startsWith("IWT")) icWaterTemp = input.substring(3).toFloat();
+    else if (input.startsWith("L")) lambdaVal = input.substring(1).toFloat();
+    else if (input.startsWith("IT")) intakeTemp = input.substring(2).toFloat();
+    else if (input.startsWith("EGT")) egt = input.substring(3).toFloat();
+    else if (input.startsWith("BV")) batteryVolts = input.substring(2).toFloat();
+    else if (input.startsWith("BP")) boostPressure = input.substring(2).toFloat();
+    else if (input.startsWith("HT")) hybridTemp = input.substring(2).toFloat();
+    else if (input.startsWith("HV")) hybridVolts = input.substring(2).toFloat();
+    else if (input.startsWith("G")) currentGear = input.substring(1).toInt();
+    else if (input.startsWith("SoC")) stateOfCharge = input.substring(3).toInt();
+  }
   // --- CORE 1: Screen render ---
   if (millis() - lastScreenUpdate >= 33) {
     lastScreenUpdate = millis();
