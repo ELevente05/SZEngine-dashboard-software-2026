@@ -39,6 +39,12 @@ float I_out = 0.0;
 
 // --- SERIAL & TIMING ---
 unsigned long lastBroadcastTime = 0;
+
+constexpr uint32_t CAN_ID_MAIN_STATUS_1 = 0x520;
+constexpr uint32_t CAN_ID_MAIN_STATUS_2 = 0x521;
+constexpr uint32_t CAN_ID_MAIN_STATUS_3 = 0x522;
+constexpr uint32_t CAN_ID_MAIN_STATUS_4 = 0x523;
+constexpr uint32_t CAN_ID_ACTIVE_SCREEN = 0x524;
 char serialBuffer[64];
 int serialIndex = 0;
 
@@ -127,53 +133,40 @@ void loop() {
     lastBroadcastTime = millis();
     uint8_t payload[8];
 
-    // --- MAXXECU FORMAT FRAMES ---
-
-    // Frame 0x520: RPM, Throttle (Empty), Lambda
-    memset(payload, 0, 8); 
+    // Frame 0x520: RPM, Lambda, Boost, Gear, SoC
+    memset(payload, 0, 8);
     encodeBE(payload, 0, rpm);
-    encodeBE(payload, 6, (int16_t)(lambdaVal * 1000));
-    broadcastData(0x520, payload, 8);
+    encodeBE(payload, 2, (int16_t)(lambdaVal * 1000));
+    encodeBE(payload, 4, (int16_t)(boostPressure * 1000));
+    payload[6] = (uint8_t)currentGear;
+    payload[7] = (uint8_t)stateOfCharge;
+    broadcastData(CAN_ID_MAIN_STATUS_1, payload, 8);
 
-    // Frame 0x530: Battery, IAT, EWT
+    // Frame 0x521: Battery, IAT, EWT, IC water
     memset(payload, 0, 8);
     encodeBE(payload, 0, (int16_t)(batteryVolts * 100));
-    encodeBE(payload, 4, (int16_t)(intakeTemp * 10));
-    encodeBE(payload, 6, (int16_t)(engineWaterTemp * 10));
-    broadcastData(0x530, payload, 8);
+    encodeBE(payload, 2, (int16_t)(intakeTemp * 10));
+    encodeBE(payload, 4, (int16_t)(engineWaterTemp * 10));
+    encodeBE(payload, 6, (int16_t)(icWaterTemp * 10));
+    broadcastData(CAN_ID_MAIN_STATUS_2, payload, 8);
 
-    // Frame 0x531: EGT
+    // Frame 0x522: Oil pressure, oil temp, EGT, hybrid temp
     memset(payload, 0, 8);
-    encodeBE(payload, 6, (int16_t)egt);
-    broadcastData(0x531, payload, 8);
+    encodeBE(payload, 0, (int16_t)(oilPress * 1000));
+    encodeBE(payload, 2, (int16_t)(oilTemp * 10));
+    encodeBE(payload, 4, (int16_t)egt);
+    encodeBE(payload, 6, (int16_t)(hybridTemp * 100));
+    broadcastData(CAN_ID_MAIN_STATUS_3, payload, 8);
 
-    // Frame 0x536: Gear, Oil Pressure, Oil Temp
+    // Frame 0x523: Hybrid volts
     memset(payload, 0, 8);
-    payload[0] = (uint8_t)currentGear; 
-    encodeBE(payload, 4, (int16_t)(oilPress * 1000)); 
-    encodeBE(payload, 6, (int16_t)(oilTemp * 10));
-    broadcastData(0x536, payload, 8);
+    encodeBE(payload, 0, (int16_t)(hybridVolts * 100));
+    broadcastData(CAN_ID_MAIN_STATUS_4, payload, 8);
 
-
-    // --- CUSTOM FRAMES ---
-    
-    // Frame 0x101: IC Water Temp
+    // Frame 0x524: Active screen only
     memset(payload, 0, 8);
-    memcpy(&payload[4], &icWaterTemp, 4);
-    broadcastData(0x101, payload, 8);
-
-    // Frame 0x104: Boost Pressure & Hybrid Temp
-    memset(payload, 0, 8);
-    memcpy(&payload[0], &boostPressure, 4); 
-    memcpy(&payload[4], &hybridTemp, 4);
-    broadcastData(0x104, payload, 8);
-
-    // Frame 0x105: Hybrid Volts, SoC, Screen State
-    memset(payload, 0, 8);
-    memcpy(&payload[0], &hybridVolts, 4);
-    payload[5] = (uint8_t)stateOfCharge;
-    payload[6] = (uint8_t)activeScreen;
-    broadcastData(0x105, payload, 7); 
+    payload[0] = (uint8_t)activeScreen;
+    broadcastData(CAN_ID_ACTIVE_SCREEN, payload, 1);
     
     // Frame 0x600: T_1 to T_4
     memset(payload, 0, 8);

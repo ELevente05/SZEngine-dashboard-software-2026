@@ -7,6 +7,7 @@
 #include <math.h>
 #include "driver/twai.h"
 #include <Adafruit_NeoPixel.h>
+#include "standalone_replay.h"
 
 // --- PIN CONFIG ---
 #define SPI_SCK   12
@@ -178,7 +179,13 @@ unsigned long lastScreenUpdate = 0;
 TaskHandle_t TaskCAN;
 
 // --- HELPERS ---
-int16_t parseBE(uint8_t* data, int offset) { return (data[offset] << 8) | data[offset + 1]; }
+constexpr uint32_t CAN_ID_MAIN_STATUS_1 = 0x520;
+constexpr uint32_t CAN_ID_MAIN_STATUS_2 = 0x521;
+constexpr uint32_t CAN_ID_MAIN_STATUS_3 = 0x522;
+constexpr uint32_t CAN_ID_MAIN_STATUS_4 = 0x523;
+constexpr uint32_t CAN_ID_ACTIVE_SCREEN = 0x524;
+
+int16_t parseBE(const uint8_t* data, int offset) { return (data[offset] << 8) | data[offset + 1]; }
 
 // =========================================================================
 // --- CORE 0: DEDICATED CAN BUS TASK ---
@@ -192,35 +199,30 @@ void TaskCANcode(void * pvParameters) {
     
     while (twai_receive(&rx_msg, pdMS_TO_TICKS(1)) == ESP_OK) {
       switch (rx_msg.identifier) {
-        case 0x520: 
+        case CAN_ID_MAIN_STATUS_1:
           rpm = parseBE(rx_msg.data, 0); 
-          boostPressure = parseBE(rx_msg.data, 4) * 0.001;
-          lambdaVal = parseBE(rx_msg.data, 6) * 0.001; 
+          lambdaVal = parseBE(rx_msg.data, 2) * 0.001f;
+          boostPressure = parseBE(rx_msg.data, 4) * 0.001f;
+          currentGear = rx_msg.data[6];
+          stateOfCharge = rx_msg.data[7];
           break;
-        case 0x530: 
-          batteryVolts = parseBE(rx_msg.data, 0) * 0.01; 
-          intakeTemp = parseBE(rx_msg.data, 4) * 0.1; 
-          engineWaterTemp = parseBE(rx_msg.data, 6) * 0.1; 
+        case CAN_ID_MAIN_STATUS_2:
+          batteryVolts = parseBE(rx_msg.data, 0) * 0.01f;
+          intakeTemp = parseBE(rx_msg.data, 2) * 0.1f;
+          engineWaterTemp = parseBE(rx_msg.data, 4) * 0.1f;
+          icWaterTemp = parseBE(rx_msg.data, 6) * 0.1f;
           break;
-        case 0x531: 
-          egt = parseBE(rx_msg.data, 6) * 1.0; 
+        case CAN_ID_MAIN_STATUS_3:
+          oilPress = parseBE(rx_msg.data, 0) * 0.001f;
+          oilTemp = parseBE(rx_msg.data, 2) * 0.1f;
+          egt = parseBE(rx_msg.data, 4) * 1.0f;
+          hybridTemp = parseBE(rx_msg.data, 6) * 0.01f;
           break;
-        case 0x536: 
-          currentGear = rx_msg.data[0]; 
-          oilPress = parseBE(rx_msg.data, 4) * 0.001; 
-          oilTemp = parseBE(rx_msg.data, 6) * 0.1; 
+        case CAN_ID_MAIN_STATUS_4:
+          hybridVolts = parseBE(rx_msg.data, 0) * 0.01f;
           break;
-        case 0x101: 
-          memcpy((void*)&icWaterTemp, &rx_msg.data[4], 4); 
-          break;
-        case 0x102: 
-          //memcpy((void*)&boostPressure, &rx_msg.data[0], 4); 
-          memcpy((void*)&hybridTemp, &rx_msg.data[4], 4); 
-          break;
-        case 0x103: 
-          memcpy((void*)&hybridVolts, &rx_msg.data[0], 4); 
-          stateOfCharge = rx_msg.data[5]; 
-          activeScreen = rx_msg.data[6]; 
+        case CAN_ID_ACTIVE_SCREEN:
+          activeScreen = rx_msg.data[0];
           break;
 
         case 0x600:
@@ -303,6 +305,28 @@ void updateLEDs() {
     }
   }
   strip.show(); 
+}
+
+void playBootLedAnimation() {
+  strip.clear();
+  strip.show();
+
+  for (int step = 0; step < (NUM_LEDS + 1) / 2; ++step) {
+    const int leftIndex = step;
+    const int rightIndex = NUM_LEDS - 1 - step;
+
+    strip.setPixelColor(leftIndex, strip.Color(255, 0, 0));
+    if (rightIndex != leftIndex) {
+      strip.setPixelColor(rightIndex, strip.Color(255, 0, 0));
+    }
+
+    strip.show();
+    delay(120);
+  }
+
+  delay(1400);
+  strip.clear();
+  strip.show();
 }
 
 void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float maxVal, float val) {
@@ -534,12 +558,12 @@ void setup() {
   u8g2.drawXBM(73, 10, 94, 82, SZEngine_logo);
   u8g2.drawXBM(10, 100, 221, 27, SZEngine_title);
   u8g2.sendBuffer();
-  strip.fill(strip.Color(255, 0, 0), 0, NUM_LEDS);
-  strip.show();
-  delay(3000);
-  strip.clear();
-  strip.show();
-  
+
+  playBootLedAnimation();
+
+#ifdef STANDALONE_REPLAY
+  standaloneReplaySetup();
+#else
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
   g_config.rx_queue_len = 20; 
   twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS(); 
@@ -559,9 +583,14 @@ void setup() {
     10,            /* Priority of the task */
     &TaskCAN,      /* Task handle */
     0);            /* Pin task to core 0 */
+#endif
 }
 
 void loop() {
+#ifdef STANDALONE_REPLAY
+  standaloneReplayTick();
+#endif
+
   // --- CORE 1: Screen render ---
   if (millis() - lastScreenUpdate >= 33) {
     lastScreenUpdate = millis();
