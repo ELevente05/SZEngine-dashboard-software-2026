@@ -390,13 +390,13 @@ void drawScreen2() {
   u8g2.drawStr(8, 15, "Oil T");
   u8g2.drawStr(68, 15, "Oil P");
   u8g2.drawStr(122, 15, "EWaterT");
-  u8g2.drawStr(183, 15, "IWaterT");
+  u8g2.drawStr(183, 15, "RPM");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", oilTemp); u8g2.drawStr(5, 35, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", oilPress); u8g2.drawStr(65, 35, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", engineWaterTemp); u8g2.drawStr(125, 35, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", icWaterTemp); u8g2.drawStr(187, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%d", rpm); u8g2.drawStr(187, 35, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
   u8g2.drawStr(4, 58, "Lambda");
