@@ -144,6 +144,12 @@ static const unsigned char PROGMEM SZEngine_title[756] = {
 struct VehicleData {
   int activeScreen = 1; 
 
+  int rpm = 4000;
+  int speed = 0;       
+  int currentGear = 0; 
+  float stateOfCharge = 40.0f;
+  float boostPressure = 0.3f;
+  
   float oilTemp = 97.0f;
   float oilPress = 2.4f;
   float engineWaterTemp = 89.8f;
@@ -152,12 +158,8 @@ struct VehicleData {
   float intakeTemp = 43.8f;
   float egt = 490.0f;
   float batteryVolts = 13.3f;
-  float boostPressure = 0.3f;
   float hybridTemp = 26.34f;
   float hybridVolts = 39.6f;
-  int currentGear = 0;
-  int stateOfCharge = 400;
-  int rpm = 4000;
 
   float T_1 = 26.02f, T_2 = 25.94f, T_3 = 25.86f, T_4 = 25.88f;
   float T_5 = 25.82f, T_6 = 26.17f, T_7 = 25.94f, T_8 = 26.34f;
@@ -167,6 +169,9 @@ struct VehicleData {
   float V_1 = 4.13f, V_2 = 4.14f, V_3 = 4.15f, V_4 = 4.16f;
   float V_5 = 4.17f, V_6 = 4.18f, V_7 = 4.19f, V_8 = 4.13f;
   float V_9 = 4.20f, V_10 = 4.20f, V_out = 41.85f, I_out = 0.0f;
+
+  bool hasWarning = false;
+  const char* warningMsg = nullptr; 
 };
 
 // Global State and Mutex to prevent data tearing across CPU Cores
@@ -174,7 +179,7 @@ VehicleData globalVehicleState;
 SemaphoreHandle_t stateMutex;
 
 // --- SETTINGS & TIMERS ---
-constexpr int rpmStart = 4000; // Constexpr prevents division-by-zero bounds overflow
+constexpr int rpmStart = 4000; 
 constexpr int rpmMax = 7000;   
 unsigned long lastScreenUpdate = 0; 
 
@@ -182,7 +187,9 @@ unsigned long lastScreenUpdate = 0;
 TaskHandle_t TaskCAN;
 
 // --- HELPERS ---
-// Safe Little Endian Parser: Protects against undefined sign-bit extensions
+constexpr uint32_t CAN_ID_ACTIVE_SCREEN = 0x524;
+
+// Safe Little Endian Parser
 inline int16_t parseLE(const uint8_t* data, int offset) { 
   uint16_t raw_val = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
   return static_cast<int16_t>(raw_val); 
@@ -199,52 +206,61 @@ void TaskCANcode(void * pvParameters) {
       // Lock data structure to update safely
       if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
         
+        // CAN IDs Sorted in strictly ascending numerical order
         switch (rx_msg.identifier) {
-          case 0x520: // RPM, Lambda, MAP
-            if (rx_msg.data_length_code >= 8) { // Data bounds validation
+          case 0x520: // RPM, MAP/Boost, Lambda
+            if (rx_msg.data_length_code >= 8) { 
               globalVehicleState.rpm = parseLE(rx_msg.data, 0); 
               globalVehicleState.boostPressure = parseLE(rx_msg.data, 4) * 0.1f;
               globalVehicleState.lambdaVal = parseLE(rx_msg.data, 6); 
             }
             break;
-          case 0x540: // Current Gear
+            
+          case 0x524: // ACTIVE SCREEN
             if (rx_msg.data_length_code >= 1) {
-              globalVehicleState.currentGear = rx_msg.data[0]; 
+              globalVehicleState.activeScreen = rx_msg.data[0];
             }
             break;
+
           case 0x530: // Battery Volts, Intake Temp
             if (rx_msg.data_length_code >= 6) {
               globalVehicleState.batteryVolts = parseLE(rx_msg.data, 0) * 0.01f;
               globalVehicleState.intakeTemp = parseLE(rx_msg.data, 4) * 0.1f;
             }
             break;
-          case 0x533: // Engine Water Temp
-            if (rx_msg.data_length_code >= 2) {
-              globalVehicleState.engineWaterTemp = parseLE(rx_msg.data, 0);
+
+          case 0x531: // EGT 1
+            if (rx_msg.data_length_code >= 8) {
+              globalVehicleState.egt = parseLE(rx_msg.data, 6);
             }
             break;
+
           case 0x532: // IC Water Temp
             if (rx_msg.data_length_code >= 6) {
               globalVehicleState.icWaterTemp = parseLE(rx_msg.data, 4);
             }
             break;
+            
+          case 0x533: // Engine Water Temp
+            if (rx_msg.data_length_code >= 2) {
+              globalVehicleState.engineWaterTemp = parseLE(rx_msg.data, 0);
+            }
+            break;
+
           case 0x538: // Engine Oil Press, Engine Oil Temp
             if (rx_msg.data_length_code >= 4) {
               globalVehicleState.oilPress = parseLE(rx_msg.data, 0) * 0.1f;
               globalVehicleState.oilTemp = parseLE(rx_msg.data, 2) * 0.1f;
             }
             break;
-          case 0x531: // EGT 1
-            if (rx_msg.data_length_code >= 8) {
-              globalVehicleState.egt = parseLE(rx_msg.data, 6);
-            }
-            break;
-          case 0x524: // Active Screen
+
+          case 0x540: // Current Gear
             if (rx_msg.data_length_code >= 1) {
-              globalVehicleState.activeScreen = rx_msg.data[0];
+              globalVehicleState.currentGear = rx_msg.data[0]; 
             }
             break;
-          case 0x600:
+
+          case 0x600: // Temps 1-4
             if (rx_msg.data_length_code >= 8) {
               globalVehicleState.T_1 = parseLE(rx_msg.data, 0) * 0.1f;
               globalVehicleState.T_2 = parseLE(rx_msg.data, 2) * 0.1f;
@@ -252,7 +268,8 @@ void TaskCANcode(void * pvParameters) {
               globalVehicleState.T_4 = parseLE(rx_msg.data, 6) * 0.1f;
             }
             break;
-          case 0x601:
+
+          case 0x601: // Temps 5-8
             if (rx_msg.data_length_code >= 8) {
               globalVehicleState.T_5 = parseLE(rx_msg.data, 0) * 0.1f;
               globalVehicleState.T_6 = parseLE(rx_msg.data, 2) * 0.1f;
@@ -260,7 +277,8 @@ void TaskCANcode(void * pvParameters) {
               globalVehicleState.T_8 = parseLE(rx_msg.data, 6) * 0.1f;
             }
             break;
-          case 0x602:
+
+          case 0x602: // Temps 9-12
             if (rx_msg.data_length_code >= 8) {
               globalVehicleState.T_9 = parseLE(rx_msg.data, 0) * 0.1f;
               globalVehicleState.T_10 = parseLE(rx_msg.data, 2) * 0.1f;
@@ -268,7 +286,8 @@ void TaskCANcode(void * pvParameters) {
               globalVehicleState.T_12 = parseLE(rx_msg.data, 6) * 0.1f;
             }
             break;
-          case 0x603:
+
+          case 0x603: // Temps 13-16
             if (rx_msg.data_length_code >= 8) {
               globalVehicleState.T_13 = parseLE(rx_msg.data, 0) * 0.1f;
               globalVehicleState.T_14 = parseLE(rx_msg.data, 2) * 0.1f;
@@ -276,7 +295,8 @@ void TaskCANcode(void * pvParameters) {
               globalVehicleState.T_16 = parseLE(rx_msg.data, 6) * 0.1f;
             }
             break;
-          case 0x610:
+
+          case 0x610: // Volts 1-4
             if (rx_msg.data_length_code >= 8) {
               globalVehicleState.V_1 = parseLE(rx_msg.data, 0) * 0.1f;
               globalVehicleState.V_2 = parseLE(rx_msg.data, 2) * 0.1f;
@@ -284,7 +304,8 @@ void TaskCANcode(void * pvParameters) {
               globalVehicleState.V_4 = parseLE(rx_msg.data, 6) * 0.1f;
             }
             break;
-          case 0x611:
+
+          case 0x611: // Volts 5-8
             if (rx_msg.data_length_code >= 8) {
               globalVehicleState.V_5 = parseLE(rx_msg.data, 0) * 0.1f;
               globalVehicleState.V_6 = parseLE(rx_msg.data, 2) * 0.1f;
@@ -292,7 +313,8 @@ void TaskCANcode(void * pvParameters) {
               globalVehicleState.V_8 = parseLE(rx_msg.data, 6) * 0.1f;
             }
             break;
-          case 0x612:
+
+          case 0x612: // Volts 9-10 & Output
             if (rx_msg.data_length_code >= 8) {
               globalVehicleState.V_9 = parseLE(rx_msg.data, 0) * 0.1f;
               globalVehicleState.V_10 = parseLE(rx_msg.data, 2) * 0.1f;
@@ -318,7 +340,7 @@ void updateLEDs(int currentRpm) {
 
   if (currentRpm >= rpmMax) {
     redline = true;
-  } else if (rpmMax > rpmStart && currentRpm >= rpmStart) { // Prevent Divide by 0
+  } else if (rpmMax > rpmStart && currentRpm >= rpmStart) { 
     numLedsToLight = static_cast<int>((currentRpm - rpmStart) * NUM_LEDS / static_cast<float>(rpmMax - rpmStart)) + 1;
     if (numLedsToLight > NUM_LEDS) numLedsToLight = NUM_LEDS;
   }
@@ -366,53 +388,150 @@ void playBootLedAnimation() {
 }
 
 void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float maxVal, float val) {
-  if (val < minVal) val = minVal; 
-  if (val > maxVal) val = maxVal;
-  u8g2.drawCircle(cx, cy, radius); 
-  u8g2.drawCircle(cx, cy, radius - thickness);
-  
-  float start_angle = 2.356f; 
-  float end_angle = 7.068f;   
-  float target_angle = start_angle + ((val - minVal) / (maxVal - minVal)) * (end_angle - start_angle);
-  
-  // Refactored to integer looping to prevent floating point inaccuracy buildup
-  int steps = static_cast<int>((target_angle - start_angle) / 0.05f);
-  for (int i = 0; i <= steps; ++i) {
-    float a = start_angle + (i * 0.05f);
-    int x = static_cast<int>(cx + (radius - thickness/2) * cos(a));
-    int y = static_cast<int>(cy + (radius - thickness/2) * sin(a));
-    u8g2.drawDisc(x, y, thickness/2);
-  }
+    if (val < minVal) val = minVal; 
+    if (val > maxVal) val = maxVal;
+
+    // 240-degree sweep: 150 degrees (8 o'clock) to 390 degrees (4 o'clock)
+    float start_angle = 2.618f; 
+    float end_angle = 6.807f;   
+    float mid_radius = radius - (thickness / 2.0f);
+
+    // 1. Draw Background Track (Empty outline)
+    float step_out = 1.0f / radius;
+    for (float a = start_angle; a <= end_angle; a += step_out) {
+        u8g2.drawPixel(round(cx + radius * cos(a)), round(cy + radius * sin(a)));
+    }
+    float step_in = 1.0f / (radius - thickness);
+    for (float a = start_angle; a <= end_angle; a += step_in) {
+        u8g2.drawPixel(round(cx + (radius - thickness) * cos(a)), round(cy + (radius - thickness) * sin(a)));
+    }
+
+    // Draw empty circles as background endcaps
+    u8g2.drawCircle(round(cx + mid_radius * cos(start_angle)), round(cy + mid_radius * sin(start_angle)), thickness / 2);
+    u8g2.drawCircle(round(cx + mid_radius * cos(end_angle)), round(cy + mid_radius * sin(end_angle)), thickness / 2);
+
+    // 2. Draw inward-pointing tick marks (0%, 25%, 50%, 75%, 100%)
+    for (int i = 0; i <= 4; ++i) {
+        float angle = start_angle + i * ((end_angle - start_angle) / 4.0f);
+        // Start at the inner track line
+        int x1 = round(cx + (radius - thickness) * cos(angle));
+        int y1 = round(cy + (radius - thickness) * sin(angle));
+        // Point 5 pixels inward toward the center
+        int x2 = round(cx + (radius - thickness - 5) * cos(angle)); 
+        int y2 = round(cy + (radius - thickness - 5) * sin(angle));
+        u8g2.drawLine(x1, y1, x2, y2);
+    }
+
+    // 3. Fill the active portion (Glitch-Free Concentric Arc Method)
+    float normalizedVal = (val - minVal) / (maxVal - minVal);
+    float target_angle = start_angle + (normalizedVal * (end_angle - start_angle));
+
+    // By incrementing the radius and drawing curves, we guarantee zero pixel gaps
+    for (int r = radius - thickness; r <= radius; r++) {
+        float step_fill = 1.0f / r; // Dynamically scale the step so pixels touch perfectly
+        for (float a = start_angle; a <= target_angle; a += step_fill) {
+            u8g2.drawPixel(round(cx + r * cos(a)), round(cy + r * sin(a)));
+        }
+    }
+
+    // 4. Draw solid filled circles at the ends for perfectly rounded active caps
+    u8g2.drawDisc(round(cx + mid_radius * cos(start_angle)), round(cy + mid_radius * sin(start_angle)), thickness / 2);
+    
+    if (normalizedVal > 0.01f) { 
+        u8g2.drawDisc(round(cx + mid_radius * cos(target_angle)), round(cy + mid_radius * sin(target_angle)), thickness / 2);
+    }
 }
 
 // --- SCREEN 1 ---
 void drawScreen1(const VehicleData& state) {
-  char textBuffer[32]; 
-  u8g2.setFont(u8g2_font_logisoso92_tn); 
-  snprintf(textBuffer, sizeof(textBuffer), "%d", state.currentGear);
-  u8g2.drawStr(95, 125, textBuffer);
-  
-  u8g2.setFontMode(1);
-  u8g2.setBitmapMode(1);
-  u8g2.setFont(u8g2_font_profont22_tr);
-  u8g2.drawStr(20, 24, "Boost");
-  u8g2.drawStr(105, 24, "Gear");
-  u8g2.drawStr(190, 24, "SoC");
-  u8g2.drawStr(161, 104, "Hy.T"); 
+    char textBuf[16];
 
-  u8g2.setFont(u8g2_font_profont29_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%d%%", state.stateOfCharge); 
-  u8g2.drawStr(176, 48, textBuffer);
+    u8g2.setFontMode(1);
+    u8g2.setBitmapMode(1);
 
-  u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.boostPressure);
-  u8g2.drawStr(33, 77, textBuffer);
+    // =========================================================================
+    // STRUCTURAL OUTLINES & SHAPES
+    // =========================================================================
+    u8g2.drawFrame(0, 0, 240, 128);     // Outer bounds
+    u8g2.drawFrame(60, 0, 180, 22);     // Top right frame
+    u8g2.drawFrame(60, 21, 180, 22);    // Second right frame
+    u8g2.drawLine(60, 0, 60, 128);      // Main asymmetrical vertical split (60px)
+    u8g2.drawLine(150, 0, 150, 128);    // Second vertical split (150px)
+    u8g2.drawLine(61, 84, 150, 84);     // Middle horizontal split
 
-  u8g2.setFont(u8g2_font_profont22_tf);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f°C", state.hybridTemp);
-  u8g2.drawUTF8(161, 126, textBuffer); 
+    // =========================================================================
+    // LEFT ZONE: GEAR (0 - 60px)
+    // =========================================================================
+    u8g2.setFont(u8g2_font_profont17_tr);
+    u8g2.drawStr(12, 15, "Gear");
 
-  drawGauge(50, 70, 40, 10, 0.0, 2.5, state.boostPressure);
+    u8g2.setFont(u8g2_font_logisoso92_tn);
+    snprintf(textBuf, sizeof(textBuf), "%d", state.currentGear);
+    u8g2.drawStr(0, 119, textBuf);
+
+    // =========================================================================
+    // MIDDLE ZONE: RPM, KPH, SoC, WTEO (60px - 150px)
+    // =========================================================================
+    u8g2.setFont(u8g2_font_profont17_tr);
+    
+    // Labels
+    u8g2.drawStr(66, 17, "SoC");
+    u8g2.drawStr(66, 38, "WTEO");
+    u8g2.drawStr(64, 58, "RPM");
+    u8g2.drawStr(64, 102, "KPH");
+
+    // Top Values (SoC & Water Temp)
+    snprintf(textBuf, sizeof(textBuf), "%.0f%%", state.stateOfCharge);
+    u8g2.drawStr(110, 17, textBuf);
+
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.engineWaterTemp);
+    u8g2.drawStr(110, 38, textBuf);
+
+    // Bottom Values (RPM & Speed)
+    u8g2.setFont(u8g2_font_profont29_tr);
+    snprintf(textBuf, sizeof(textBuf), "%d", state.rpm);
+    u8g2.drawStr(64, 81, textBuf);
+
+    snprintf(textBuf, sizeof(textBuf), "%d", state.speed);
+    u8g2.drawStr(64, 126, textBuf);
+
+    // =========================================================================
+    // RIGHT ZONE: HYBRID DATA & BOOST GAUGE (150px - 240px)
+    // =========================================================================
+    u8g2.setFont(u8g2_font_profont17_tr);
+    
+    // Hybrid Temp Label & Value
+    u8g2.drawStr(156, 17, "Hy.T");
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.hybridTemp);
+    u8g2.drawStr(199, 17, textBuf);
+
+    u8g2.drawStr(155, 38, "X"); // Placeholder from your layout
+
+    // Boost Bar Value
+    u8g2.drawStr(182, 120, "bar");
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.boostPressure);
+    u8g2.drawStr(182, 106, textBuf);
+
+    // Dynamic Circular Gauge (Replaces static u8g2.drawEllipse(194, 84, 40, 40))
+    // Center X: 194, Center Y: 84, Radius: 40, Thickness: 10
+    drawGauge(194, 84, 40, 10, 0.0, 2.5, state.boostPressure);
+
+    // =========================================================================
+    // HIGH-PRIORITY WARNING INJECTION
+    // =========================================================================
+    if (state.hasWarning && state.warningMsg != nullptr) {
+        // Draw solid box for inverse video effect (Overrides the top row)
+        u8g2.setDrawColor(1);
+        u8g2.drawBox(60, 0, 180, 22); 
+        
+        // Draw transparent text over it
+        u8g2.setDrawColor(0); 
+        u8g2.setFont(u8g2_font_profont17_tr);
+        u8g2.drawStr(66, 17, state.warningMsg);
+        
+        // Restore standard drawing color
+        u8g2.setDrawColor(1); 
+    }
 }
 
 // --- SCREEN 2 ---
@@ -452,7 +571,6 @@ void drawScreen2(const VehicleData& state) {
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.batteryVolts); u8g2.drawStr(182, 77, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(4, 100, "Boost");
   u8g2.drawStr(62, 100, "HybridT");
   u8g2.drawStr(123, 100, "HybridV");
   u8g2.drawStr(195, 100, "Gear");
@@ -553,7 +671,6 @@ void drawScreen4(const VehicleData& state) {
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_out); u8g2.drawStr(121, 121, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.I_out); u8g2.drawStr(182, 121, textBuffer); 
 }
-
 
 void setup() {
   delay(500); 
