@@ -178,92 +178,92 @@ unsigned long lastScreenUpdate = 0;
 TaskHandle_t TaskCAN;
 
 // --- HELPERS ---
-int16_t parseBE(uint8_t* data, int offset) { return (data[offset] << 8) | data[offset + 1]; }
+constexpr uint32_t CAN_ID_ACTIVE_SCREEN = 0x524;
+
+// NEW: Little Endian Parser
+int16_t parseLE(const uint8_t* data, int offset) { 
+  return data[offset] | (data[offset + 1] << 8); 
+}
 
 // =========================================================================
 // --- CORE 0: DEDICATED CAN BUS TASK ---
 // =========================================================================
 void TaskCANcode(void * pvParameters) {
-  //Serial.print("CAN Task Successfully Booted on Core: ");
-  //Serial.println(xPortGetCoreID());
-
   for(;;) { // Infinite FreeRTOS Loop
     twai_message_t rx_msg;
     
     while (twai_receive(&rx_msg, pdMS_TO_TICKS(1)) == ESP_OK) {
       switch (rx_msg.identifier) {
-        case 0x520: 
-          rpm = parseBE(rx_msg.data, 0); 
-          boostPressure = parseBE(rx_msg.data, 4) * 0.001;
-          lambdaVal = parseBE(rx_msg.data, 6) * 0.001; 
+        // --- NEW MAPPINGS ---
+        case 0x520: // RPM, Lambda, MAP
+          rpm = parseLE(rx_msg.data, 0); 
+          boostPressure = parseLE(rx_msg.data, 4) * 0.1f;
+          lambdaVal = parseLE(rx_msg.data, 6); 
           break;
-        case 0x530: 
-          batteryVolts = parseBE(rx_msg.data, 0) * 0.01; 
-          intakeTemp = parseBE(rx_msg.data, 4) * 0.1; 
-          engineWaterTemp = parseBE(rx_msg.data, 6) * 0.1; 
+          case 0x530: // Battery Volts, Intake Temp
+          batteryVolts = parseLE(rx_msg.data, 0) * 0.01f;
+          intakeTemp = parseLE(rx_msg.data, 4) * 0.1f;
           break;
-        case 0x531: 
-          egt = parseBE(rx_msg.data, 6) * 1.0; 
+        case 0x531: // EGT 1
+          egt = parseLE(rx_msg.data, 6);
           break;
-        case 0x536: 
+        case 0x532: // IC Water Temp
+          icWaterTemp = parseLE(rx_msg.data, 4);
+          break;
+        case 0x533: // Engine Water Temp
+          engineWaterTemp = parseLE(rx_msg.data, 0);
+          break;
+        case 0x538: // Engine Oil Press, Engine Oil Temp
+          oilPress = parseLE(rx_msg.data, 0) * 0.1f;
+          oilTemp = parseLE(rx_msg.data, 2) * 0.1f;
+          break;
+        case 0x540: // Current Gear
           currentGear = rx_msg.data[0]; 
-          oilPress = parseBE(rx_msg.data, 4) * 0.001; 
-          oilTemp = parseBE(rx_msg.data, 6) * 0.1; 
           break;
-        case 0x101: 
-          memcpy((void*)&icWaterTemp, &rx_msg.data[4], 4); 
+        case 0x524:
+          activeScreen = rx_msg.data[0];
           break;
-        case 0x102: 
-          //memcpy((void*)&boostPressure, &rx_msg.data[0], 4); 
-          memcpy((void*)&hybridTemp, &rx_msg.data[4], 4); 
-          break;
-        case 0x103: 
-          memcpy((void*)&hybridVolts, &rx_msg.data[0], 4); 
-          stateOfCharge = rx_msg.data[5]; 
-          activeScreen = rx_msg.data[6]; 
-          break; 
-
         case 0x600:
-          T_1 = parseBE(rx_msg.data, 0) * 0.1;
-          T_2 = parseBE(rx_msg.data, 2) * 0.1;
-          T_3 = parseBE(rx_msg.data, 4) * 0.1;
-          T_4 = parseBE(rx_msg.data, 6) * 0.1;
+          T_1 = parseLE(rx_msg.data, 0) * 0.1;
+          T_2 = parseLE(rx_msg.data, 2) * 0.1;
+          T_3 = parseLE(rx_msg.data, 4) * 0.1;
+          T_4 = parseLE(rx_msg.data, 6) * 0.1;
           break;
         case 0x601:
-          T_5 = parseBE(rx_msg.data, 0) * 0.1;
-          T_6 = parseBE(rx_msg.data, 2) * 0.1;
-          T_7 = parseBE(rx_msg.data, 4) * 0.1;
-          T_8 = parseBE(rx_msg.data, 6) * 0.1;
+          T_5 = parseLE(rx_msg.data, 0) * 0.1;
+          T_6 = parseLE(rx_msg.data, 2) * 0.1;
+          T_7 = parseLE(rx_msg.data, 4) * 0.1;
+          T_8 = parseLE(rx_msg.data, 6) * 0.1;
           break;
         case 0x602:
-          T_9 = parseBE(rx_msg.data, 0) * 0.1;
-          T_10 = parseBE(rx_msg.data, 2) * 0.1;
-          T_11 = parseBE(rx_msg.data, 4) * 0.1;
-          T_12 = parseBE(rx_msg.data, 6) * 0.1;
+          T_9 = parseLE(rx_msg.data, 0) * 0.1;
+          T_10 = parseLE(rx_msg.data, 2) * 0.1;
+          T_11 = parseLE(rx_msg.data, 4) * 0.1;
+          T_12 = parseLE(rx_msg.data, 6) * 0.1;
           break;
         case 0x603:
-          T_13 = parseBE(rx_msg.data, 0) * 0.1;
-          T_14 = parseBE(rx_msg.data, 2) * 0.1;
-          T_15 = parseBE(rx_msg.data, 4) * 0.1;
-          T_16 = parseBE(rx_msg.data, 6) * 0.1;
+          T_13 = parseLE(rx_msg.data, 0) * 0.1;
+          T_14 = parseLE(rx_msg.data, 2) * 0.1;
+          T_15 = parseLE(rx_msg.data, 4) * 0.1;
+          T_16 = parseLE(rx_msg.data, 6) * 0.1;
           break;
         case 0x610:
-          V_1 = parseBE(rx_msg.data, 0) * 0.1;
-          V_2 = parseBE(rx_msg.data, 2) * 0.1;
-          V_3 = parseBE(rx_msg.data, 4) * 0.1;
-          V_4 = parseBE(rx_msg.data, 6) * 0.1;
+          V_1 = parseLE(rx_msg.data, 0) * 0.1;
+          V_2 = parseLE(rx_msg.data, 2) * 0.1;
+          V_3 = parseLE(rx_msg.data, 4) * 0.1;
+          V_4 = parseLE(rx_msg.data, 6) * 0.1;
           break;
         case 0x611:
-          V_5 = parseBE(rx_msg.data, 0) * 0.1;
-          V_6 = parseBE(rx_msg.data, 2) * 0.1;
-          V_7 = parseBE(rx_msg.data, 4) * 0.1;
-          V_8 = parseBE(rx_msg.data, 6) * 0.1;
+          V_5 = parseLE(rx_msg.data, 0) * 0.1;
+          V_6 = parseLE(rx_msg.data, 2) * 0.1;
+          V_7 = parseLE(rx_msg.data, 4) * 0.1;
+          V_8 = parseLE(rx_msg.data, 6) * 0.1;
           break;
         case 0x612:
-          V_9 = parseBE(rx_msg.data, 0) * 0.1;
-          V_10 = parseBE(rx_msg.data, 2) * 0.1;
-          V_out = parseBE(rx_msg.data, 4) * 0.1;
-          I_out = parseBE(rx_msg.data, 6) * 0.1;
+          V_9 = parseLE(rx_msg.data, 0) * 0.1;
+          V_10 = parseLE(rx_msg.data, 2) * 0.1;
+          V_out = parseLE(rx_msg.data, 4) * 0.1;
+          I_out = parseLE(rx_msg.data, 6) * 0.1;
           break;
       }
     }
@@ -303,6 +303,28 @@ void updateLEDs() {
     }
   }
   strip.show(); 
+}
+
+void playBootLedAnimation() {
+  strip.clear();
+  strip.show();
+
+  for (int step = 0; step < (NUM_LEDS + 1) / 2; ++step) {
+    const int leftIndex = step;
+    const int rightIndex = NUM_LEDS - 1 - step;
+
+    strip.setPixelColor(leftIndex, strip.Color(255, 0, 0));
+    if (rightIndex != leftIndex) {
+      strip.setPixelColor(rightIndex, strip.Color(255, 0, 0));
+    }
+
+    strip.show();
+    delay(120);
+  }
+
+  delay(1400);
+  strip.clear();
+  strip.show();
 }
 
 void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float maxVal, float val) {
@@ -514,7 +536,6 @@ void drawScreen4() {
 
 
 void setup() {
-  //Serial.begin(115200); 
   delay(500); 
   
   pinMode(BACKLIGHT_PIN, OUTPUT); 
@@ -534,12 +555,9 @@ void setup() {
   u8g2.drawXBM(73, 10, 94, 82, SZEngine_logo);
   u8g2.drawXBM(10, 100, 221, 27, SZEngine_title);
   u8g2.sendBuffer();
-  strip.fill(strip.Color(255, 0, 0), 0, NUM_LEDS);
-  strip.show();
-  delay(3000);
-  strip.clear();
-  strip.show();
-  
+
+  playBootLedAnimation();
+
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
   g_config.rx_queue_len = 20; 
   twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS(); 
@@ -547,7 +565,6 @@ void setup() {
   
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
     twai_start();
-    //Serial.println("CAN Started Successfully!");
   }
 
   // --- Start CORE 0 ---
