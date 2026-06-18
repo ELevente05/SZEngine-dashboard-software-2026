@@ -179,8 +179,8 @@ VehicleData globalVehicleState;
 SemaphoreHandle_t stateMutex;
 
 // --- SETTINGS & TIMERS ---
-constexpr int rpmStart = 4000; //3500
-constexpr int rpmMax = 9000;   //9500
+constexpr int rpmStart = 3000;
+constexpr int rpmMax = 9500;
 unsigned long lastScreenUpdate = 0; 
 
 // --- TASK HANDLE ---
