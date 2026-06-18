@@ -179,8 +179,8 @@ VehicleData globalVehicleState;
 SemaphoreHandle_t stateMutex;
 
 // --- SETTINGS & TIMERS ---
-constexpr int rpmStart = 4000; 
-constexpr int rpmMax = 7000;   
+constexpr int rpmStart = 4000; //3500
+constexpr int rpmMax = 9000;   //9500
 unsigned long lastScreenUpdate = 0; 
 
 // --- TASK HANDLE ---
@@ -192,7 +192,8 @@ constexpr uint32_t CAN_ID_ACTIVE_SCREEN = 0x524;
 // Safe Little Endian Parser
 inline int16_t parseLE(const uint8_t* data, int offset) { 
   uint16_t raw_val = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
-  return static_cast<int16_t>(raw_val); 
+  //return static_cast<int16_t>(raw_val); 
+  return raw_val;
 }
 
 // =========================================================================
@@ -209,11 +210,11 @@ void TaskCANcode(void * pvParameters) {
         // CAN IDs Sorted in strictly ascending numerical order
         switch (rx_msg.identifier) {
           case 0x520: // RPM, MAP/Boost, Lambda
-            if (rx_msg.data_length_code >= 8) { 
+            //if (rx_msg.data_length_code >= 8) { 
               globalVehicleState.rpm = parseLE(rx_msg.data, 0); 
-              globalVehicleState.boostPressure = parseLE(rx_msg.data, 4) * 0.1f;
+              globalVehicleState.boostPressure = (parseLE(rx_msg.data, 4) * 0.001f) - 1;
               globalVehicleState.lambdaVal = parseLE(rx_msg.data, 6); 
-            }
+            //}
             break;
             
           case 0x524: // ACTIVE SCREEN
@@ -242,9 +243,10 @@ void TaskCANcode(void * pvParameters) {
             break;
             
           case 0x533: // Engine Water Temp
-            if (rx_msg.data_length_code >= 2) {
+            //if (rx_msg.data_length_code >= 1) {
               globalVehicleState.engineWaterTemp = parseLE(rx_msg.data, 0);
-            }
+
+            //}
             break;
 
           case 0x538: // Engine Oil Press, Engine Oil Temp
@@ -254,10 +256,11 @@ void TaskCANcode(void * pvParameters) {
             }
             break;
 
-          case 0x540: // Current Gear
-            if (rx_msg.data_length_code >= 1) {
+          case 0x543: // Current Gear
+            //if (rx_msg.data_length_code >= 1) {
               globalVehicleState.currentGear = rx_msg.data[0]; 
-            }
+              Serial.print(rx_msg.data[0]);
+            //}
             break;
 
           case 0x600: // Temps 1-4
@@ -727,6 +730,8 @@ void setup() {
     10,            /* Priority of the task */
     &TaskCAN,      /* Task handle */
     0);            /* Pin task to core 0 */
+
+  Serial.begin(115200);
 }
 
 void loop() {
@@ -737,26 +742,27 @@ void loop() {
     VehicleData localState; // Safe snapshot of the state
 
     // Attempt to lock data structure to copy it
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    //if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
       localState = globalVehicleState; // Atomically copy data
-      xSemaphoreGive(stateMutex);
-    } else {
-      return; // Skip drawing this frame to prevent screen tearing if data is busy
-    }
+    //  xSemaphoreGive(stateMutex);
+    //} else {
+    //1  return; // Skip drawing this frame to prevent screen tearing if data is busy
+    //}
 
     updateLEDs(localState.rpm);
     u8g2.clearBuffer();          
     
     // Pass the frozen snapshot to rendering functions
-    if (localState.activeScreen == 1) {
+    //if (localState.activeScreen == 1) {
       drawScreen1(localState); 
-    } else if (localState.activeScreen == 2) {
+    
+    /*,} else if (localState.activeScreen == 2) {
       drawScreen2(localState);
     } else if (localState.activeScreen == 3) {
       drawScreen3(localState);
     } else if (localState.activeScreen == 4) {
       drawScreen4(localState);
-    }
+    }*/
     
     u8g2.sendBuffer();          
   }
