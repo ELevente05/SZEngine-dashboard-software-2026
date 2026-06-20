@@ -480,24 +480,24 @@ void drawScreen1(const VehicleData& state) {
     // snprintf(textBuf, sizeof(textBuf), "%.0f%%", state.stateOfCharge);
     // u8g2.drawStr(110, 17, textBuf);
 
-    u8g2.drawStr(66, 17, "Volt");
+    u8g2.drawStr(63, 17, "Volt");
     snprintf(textBuf, sizeof(textBuf), "%.2f", state.batteryVolts);
-    u8g2.drawStr(110, 17, textBuf);
+    u8g2.drawStr(104, 17, textBuf);
     
 
-    u8g2.drawStr(66, 38, "WATR");
+    u8g2.drawStr(63, 38, "WATR");
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.engineWaterTemp);
-    u8g2.drawStr(110, 38, textBuf);
+    u8g2.drawStr(104, 38, textBuf);
 
     // u8g2.drawStr(156, 17, "Hy.T");
     // snprintf(textBuf, sizeof(textBuf), "%.1f", state.hybridTemp);
     // u8g2.drawStr(199, 17, textBuf);
 
-    u8g2.drawStr(156, 17, "OilP");
-    snprintf(textBuf, sizeof(textBuf), "%.1f", state.oilPress);
+    u8g2.drawStr(153, 17, "OilP");
+    snprintf(textBuf, sizeof(textBuf), "%.2f", state.oilPress);
     u8g2.drawStr(199, 17, textBuf);
 
-    u8g2.drawStr(155, 38, "OilT");
+    u8g2.drawStr(153, 38, "OilT");
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.oilTemp);
     u8g2.drawStr(199, 38, textBuf);
 
@@ -733,6 +733,10 @@ void setup() {
     0);            /* Pin task to core 0 */
 
   Serial.begin(115200);
+  
+  globalVehicleState.hasWarning = false;
+  globalVehicleState.warningMsg = "THE CAKE IS A LIE";
+
 }
 
 void loop() {
