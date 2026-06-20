@@ -382,10 +382,10 @@ void playBootLedAnimation() {
     }
 
     strip.show();
-    delay(120);
+    delay(130);
   }
 
-  delay(1400);
+  delay(1100);
   strip.clear();
   strip.show();
 }
@@ -455,72 +455,73 @@ void drawScreen1(const VehicleData& state) {
     // =========================================================================
     // STRUCTURAL OUTLINES & SHAPES
     // =========================================================================
-    u8g2.drawFrame(0, 0, 240, 128);     // Outer bounds
-    u8g2.drawFrame(60, 0, 180, 22);     // Top right frame
-    u8g2.drawFrame(60, 21, 180, 22);    // Second right frame
-    u8g2.drawLine(60, 0, 60, 128);      // Main asymmetrical vertical split (60px)
-    u8g2.drawLine(150, 0, 150, 128);    // Second vertical split (150px)
-    u8g2.drawLine(61, 84, 150, 84);     // Middle horizontal split
+
+    u8g2.drawFrame(0, 0, 240, 128);
+    u8g2.drawFrame(60, 0, 180, 22);
+    u8g2.drawFrame(60, 21, 180, 22);
+    u8g2.drawLine(60, 0, 60, 128);
+    u8g2.drawLine(150, 0, 150, 128);
+    u8g2.drawLine(61, 84, 150, 84);
 
     // =========================================================================
-    // LEFT ZONE: GEAR (0 - 60px)
+    // DISPLAY TEXT & DATA
     // =========================================================================
+
     u8g2.setFont(u8g2_font_profont17_tr);
-    u8g2.drawStr(12, 15, "Gear");
 
+    u8g2.drawStr(12, 15, "Gear");
     u8g2.setFont(u8g2_font_logisoso92_tn);
     snprintf(textBuf, sizeof(textBuf), "%d", state.currentGear);
     u8g2.drawStr(0, 119, textBuf);
 
-    // =========================================================================
-    // MIDDLE ZONE: RPM, KPH, SoC, WTEO (60px - 150px)
-    // =========================================================================
     u8g2.setFont(u8g2_font_profont17_tr);
-    
-    // Labels
-    u8g2.drawStr(66, 17, "SoC");
-    u8g2.drawStr(66, 38, "WTEO");
-    u8g2.drawStr(64, 58, "RPM");
-    u8g2.drawStr(64, 102, "KPH");
 
-    // Top Values (SoC & Water Temp)
-    snprintf(textBuf, sizeof(textBuf), "%.0f%%", state.stateOfCharge);
+    // u8g2.drawStr(66, 17, "SoC");
+    // snprintf(textBuf, sizeof(textBuf), "%.0f%%", state.stateOfCharge);
+    // u8g2.drawStr(110, 17, textBuf);
+
+    u8g2.drawStr(66, 17, "Volt");
+    snprintf(textBuf, sizeof(textBuf), "%.2f", state.batteryVolts);
     u8g2.drawStr(110, 17, textBuf);
+    
 
+    u8g2.drawStr(66, 38, "WATR");
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.engineWaterTemp);
     u8g2.drawStr(110, 38, textBuf);
 
-    // Bottom Values (RPM & Speed)
-    u8g2.setFont(u8g2_font_profont29_tr);
-    snprintf(textBuf, sizeof(textBuf), "%d", state.rpm);
-    u8g2.drawStr(64, 81, textBuf);
+    // u8g2.drawStr(156, 17, "Hy.T");
+    // snprintf(textBuf, sizeof(textBuf), "%.1f", state.hybridTemp);
+    // u8g2.drawStr(199, 17, textBuf);
 
-    snprintf(textBuf, sizeof(textBuf), "%d", state.speed);
-    u8g2.drawStr(64, 126, textBuf);
-
-    // =========================================================================
-    // RIGHT ZONE: HYBRID DATA & BOOST GAUGE (150px - 240px)
-    // =========================================================================
-    u8g2.setFont(u8g2_font_profont17_tr);
-    
-    // Hybrid Temp Label & Value
-    u8g2.drawStr(156, 17, "Hy.T");
-    snprintf(textBuf, sizeof(textBuf), "%.1f", state.hybridTemp);
+    u8g2.drawStr(156, 17, "OilP");
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.oilPress);
     u8g2.drawStr(199, 17, textBuf);
 
-    u8g2.drawStr(155, 38, "X"); // Placeholder from your layout
+    u8g2.drawStr(155, 38, "OilT");
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.oilTemp);
+    u8g2.drawStr(199, 38, textBuf);
 
-    // Boost Bar Value
     u8g2.drawStr(182, 120, "bar");
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.boostPressure);
     u8g2.drawStr(182, 106, textBuf);
 
-    // Dynamic Circular Gauge (Replaces static u8g2.drawEllipse(194, 84, 40, 40))
+    u8g2.drawStr(64, 58, "RPM");
+    u8g2.drawStr(64, 102, "KPH");
+
+    u8g2.setFont(u8g2_font_profont29_tr);    
+
+    snprintf(textBuf, sizeof(textBuf), "%d", state.rpm);
+    u8g2.drawStr(64, 81, textBuf);
+
+    
+    snprintf(textBuf, sizeof(textBuf), "%d", state.speed);
+    u8g2.drawStr(64, 126, textBuf);
+
     // Center X: 194, Center Y: 84, Radius: 40, Thickness: 10
     drawGauge(194, 84, 40, 10, 0.0, 2.5, state.boostPressure);
 
     // =========================================================================
-    // HIGH-PRIORITY WARNING INJECTION
+    // HIGH-PRIORITY POP-UP WARNING
     // =========================================================================
     if (state.hasWarning && state.warningMsg != nullptr) {
         // Draw solid box for inverse video effect (Overrides the top row)
