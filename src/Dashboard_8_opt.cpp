@@ -147,7 +147,7 @@ struct VehicleData {
   int rpm = 4000;
   int speed = 0;       
   int currentGear = 0; 
-  float stateOfCharge = 40.0f;
+  float stateOfCharge = 400.0f;
   float boostPressure = 0.3f;
   
   float oilTemp = 97.0f;
@@ -206,9 +206,8 @@ void TaskCANcode(void * pvParameters) {
     if (twai_receive(&rx_msg, pdMS_TO_TICKS(1)) == ESP_OK) {
       // Lock data structure to update safely
       if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-        
-        // CAN IDs Sorted in strictly ascending numerical order
         switch (rx_msg.identifier) {
+
           case 0x520: // RPM, MAP/Boost, Lambda
             //if (rx_msg.data_length_code >= 8) { 
               globalVehicleState.rpm = parseLE(rx_msg.data, 0); 
@@ -218,42 +217,41 @@ void TaskCANcode(void * pvParameters) {
             break;
             
           case 0x524: // ACTIVE SCREEN
-            if (rx_msg.data_length_code >= 1) {
+            //if (rx_msg.data_length_code >= 1) {
               globalVehicleState.activeScreen = rx_msg.data[0];
-            }
+            //}
             break;
 
           case 0x530: // Battery Volts, Intake Temp
-            if (rx_msg.data_length_code >= 6) {
+            //if (rx_msg.data_length_code >= 6) {
               globalVehicleState.batteryVolts = parseLE(rx_msg.data, 0) * 0.01f;
               globalVehicleState.intakeTemp = parseLE(rx_msg.data, 4) * 0.1f;
-            }
+            //}
             break;
 
           case 0x531: // EGT 1
-            if (rx_msg.data_length_code >= 8) {
+            //if (rx_msg.data_length_code >= 8) {
               globalVehicleState.egt = parseLE(rx_msg.data, 6);
-            }
+            //}
             break;
 
           case 0x532: // IC Water Temp
-            if (rx_msg.data_length_code >= 6) {
-              globalVehicleState.icWaterTemp = parseLE(rx_msg.data, 4);
-            }
+            //if (rx_msg.data_length_code >= 6) {
+              globalVehicleState.icWaterTemp = static_cast<float>(parseLE(rx_msg.data, 4));
+            //}
             break;
             
           case 0x533: // Engine Water Temp
             //if (rx_msg.data_length_code >= 1) {
-              globalVehicleState.engineWaterTemp = parseLE(rx_msg.data, 0);
-
+              globalVehicleState.engineWaterTemp = static_cast<float>(parseLE(rx_msg.data, 0) * 0.1f);
             //}
             break;
 
           case 0x538: // Engine Oil Press, Engine Oil Temp
-            if (rx_msg.data_length_code >= 4) {
-              globalVehicleState.oilPress = parseLE(rx_msg.data, 0) * 0.1f;
-              globalVehicleState.oilTemp = parseLE(rx_msg.data, 2) * 0.1f;
-            }
+            //if (rx_msg.data_length_code >= 4) {
+              globalVehicleState.oilPress = static_cast<float>(parseLE(rx_msg.data, 0)) * 0.1f;
+              globalVehicleState.oilTemp = static_cast<float>(parseLE(rx_msg.data, 2)) * 0.1f;
+            //}
             break;
 
           case 0x543: // Current Gear
@@ -469,7 +467,7 @@ void drawScreen1(const VehicleData& state) {
 
     u8g2.setFont(u8g2_font_profont17_tr);
 
-    u8g2.drawStr(12, 15, "Gear");
+    u8g2.drawStr(12, 15, "GEAR");
     u8g2.setFont(u8g2_font_logisoso92_tn);
     snprintf(textBuf, sizeof(textBuf), "%d", state.currentGear);
     u8g2.drawStr(0, 119, textBuf);
@@ -480,7 +478,7 @@ void drawScreen1(const VehicleData& state) {
     // snprintf(textBuf, sizeof(textBuf), "%.0f%%", state.stateOfCharge);
     // u8g2.drawStr(110, 17, textBuf);
 
-    u8g2.drawStr(63, 17, "Volt");
+    u8g2.drawStr(63, 17, "VOLT");
     snprintf(textBuf, sizeof(textBuf), "%.2f", state.batteryVolts);
     u8g2.drawStr(104, 17, textBuf);
     
@@ -501,7 +499,7 @@ void drawScreen1(const VehicleData& state) {
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.oilTemp);
     u8g2.drawStr(199, 38, textBuf);
 
-    u8g2.drawStr(182, 120, "bar");
+    u8g2.drawStr(182, 120, "BAR");
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.boostPressure);
     u8g2.drawStr(182, 106, textBuf);
 
