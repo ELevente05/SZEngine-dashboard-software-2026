@@ -159,13 +159,13 @@ struct VehicleData {
   float intakeTemp = 43.8f;
   float egt = 490.0f;
   float batteryVolts = 13.3f;
-  float hybridTemp = 26.34f;
-  float hybridVolts = 39.6f;
+  float hybridTemp = 26.5f;
+  float hybridVolts = 41.85f;
 
-  float T_1 = 26.02f, T_2 = 25.94f, T_3 = 25.86f, T_4 = 25.88f;
-  float T_5 = 25.82f, T_6 = 26.17f, T_7 = 25.94f, T_8 = 26.34f;
-  float T_9 = 25.73f, T_10 = 26.09f, T_11 = 25.61f, T_12 = 26.42f;
-  float T_13 = 25.50f, T_14 = 26.25f, T_15 = 25.75f, T_16 = 26.50f;
+  float T_1 = 26.0f, T_2 = 25.9f, T_3 = 25.9f, T_4 = 25.9f;
+  float T_5 = 25.8f, T_6 = 26.2f, T_7 = 25.9f, T_8 = 26.3f;
+  float T_9 = 25.7f, T_10 = 26.1f, T_11 = 25.6f, T_12 = 26.4f;
+  float T_13 = 25.5f, T_14 = 26.3f, T_15 = 25.8f, T_16 = 26.5f;
 
   float V_1 = 4.13f, V_2 = 4.14f, V_3 = 4.15f, V_4 = 4.16f;
   float V_5 = 4.17f, V_6 = 4.18f, V_7 = 4.19f, V_8 = 4.13f;
@@ -505,7 +505,7 @@ void drawScreen1(const VehicleData& state) {
     u8g2.drawStr(182, 106, textBuf);
 
     u8g2.drawStr(64, 58, "RPM");
-    u8g2.drawStr(64, 102, "KPH");
+    u8g2.drawStr(64, 100, "KPH");
 
     u8g2.setFont(u8g2_font_profont29_tr);    
 
@@ -513,7 +513,7 @@ void drawScreen1(const VehicleData& state) {
     u8g2.drawStr(64, 81, textBuf);
     
     snprintf(textBuf, sizeof(textBuf), "%d", state.speed);
-    u8g2.drawStr(64, 126, textBuf);
+    u8g2.drawStr(64, 124, textBuf);
 
     // Center X: 194, Center Y: 84, Radius: 40, Thickness: 10
     drawGauge(194, 84, 40, 10, 0.0, 2.5, state.boostPressure);
@@ -579,16 +579,6 @@ void drawScreen2(const VehicleData& state) {
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.hybridTemp); u8g2.drawStr(66, 120, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.hybridVolts); u8g2.drawStr(121, 120, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%d", state.currentGear); u8g2.drawStr(205, 120, textBuffer);
-
-  // --- POP-UP WARNING OVERRIDE ---
-  if (state.hasWarning && state.warningMsg != nullptr) {
-      u8g2.setDrawColor(1);
-      u8g2.drawBox(60, 0, 180, 22); 
-      u8g2.setDrawColor(0); 
-      u8g2.setFont(u8g2_font_profont17_tr);
-      u8g2.drawStr(66, 17, state.warningMsg);
-      u8g2.setDrawColor(1); 
-  }
 }
 
 // --- SCREEN 3 ---
@@ -606,50 +596,40 @@ void drawScreen3(const VehicleData& state) {
   u8g2.drawLine(180, 0, 180, 127);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 12, "T_1"); u8g2.drawStr(77, 12, "T_2"); u8g2.drawStr(134, 12, "T_3"); u8g2.drawStr(199, 12, "T_4");
+  u8g2.drawStr(18, 12, "T_1"); u8g2.drawStr(77, 12, "T_2"); u8g2.drawStr(134, 12, "T_3"); u8g2.drawStr(199, 12, "T_4");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_1); u8g2.drawStr(0, 30, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_2); u8g2.drawStr(60, 30, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_3); u8g2.drawStr(121, 30, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_4); u8g2.drawStr(182, 30, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_1); u8g2.drawStr(6, 30, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_2); u8g2.drawStr(67, 30, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_3); u8g2.drawStr(127, 30, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_4); u8g2.drawStr(188, 30, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 43, "T_5"); u8g2.drawStr(77, 43, "T_6"); u8g2.drawStr(135, 43, "T_7"); u8g2.drawStr(199, 43, "T_8");
+  u8g2.drawStr(18, 43, "T_5"); u8g2.drawStr(77, 43, "T_6"); u8g2.drawStr(134, 43, "T_7"); u8g2.drawStr(199, 43, "T_8");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_5); u8g2.drawStr(0, 61, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_6); u8g2.drawStr(61, 61, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_7); u8g2.drawStr(121, 61, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_8); u8g2.drawStr(182, 61, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_5); u8g2.drawStr(6, 61, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_6); u8g2.drawStr(67, 61, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_7); u8g2.drawStr(127, 61, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_8); u8g2.drawStr(188, 61, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 75, "T_9"); u8g2.drawStr(73, 75, "T_10"); u8g2.drawStr(130, 75, "T_11"); u8g2.drawStr(192, 75, "T_12");
+  u8g2.drawStr(18, 75, "T_9"); u8g2.drawStr(73, 75, "T_10"); u8g2.drawStr(131, 75, "T_11"); u8g2.drawStr(196, 75, "T_12");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_9); u8g2.drawStr(0, 93, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_10); u8g2.drawStr(60, 93, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_11); u8g2.drawStr(121, 93, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_12); u8g2.drawStr(182, 93, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_9); u8g2.drawStr(6, 93, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_10); u8g2.drawStr(67, 93, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_11); u8g2.drawStr(127, 93, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_12); u8g2.drawStr(188, 93, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 107, "T_13"); u8g2.drawStr(73, 107, "T_14"); u8g2.drawStr(130, 107, "T_15"); u8g2.drawStr(192, 107, "T_16");
+  u8g2.drawStr(15, 107, "T_13"); u8g2.drawStr(73, 107, "T_14"); u8g2.drawStr(131, 107, "T_15"); u8g2.drawStr(196, 107, "T_16");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_13); u8g2.drawStr(0, 125, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_14); u8g2.drawStr(60, 125, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_15); u8g2.drawStr(121, 125, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.T_16); u8g2.drawStr(182, 125, textBuffer);
-
-  // --- POP-UP WARNING OVERRIDE ---
-  if (state.hasWarning && state.warningMsg != nullptr) {
-      u8g2.setDrawColor(1);
-      u8g2.drawBox(60, 0, 180, 22); 
-      u8g2.setDrawColor(0); 
-      u8g2.setFont(u8g2_font_profont17_tr);
-      u8g2.drawStr(66, 17, state.warningMsg);
-      u8g2.setDrawColor(1); 
-  }
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_13); u8g2.drawStr(6, 125, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_14); u8g2.drawStr(67, 125, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_15); u8g2.drawStr(127, 125, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_16); u8g2.drawStr(188, 125, textBuffer);
 }
 
 // --- SCREEN 4 ---
@@ -691,16 +671,6 @@ void drawScreen4(const VehicleData& state) {
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_10); u8g2.drawStr(67, 121, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_all); u8g2.drawStr(121, 121, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.I_out); u8g2.drawStr(181, 121, textBuffer); 
-
-  // --- POP-UP WARNING OVERRIDE ---
-  if (state.hasWarning && state.warningMsg != nullptr) {
-      u8g2.setDrawColor(1);
-      u8g2.drawBox(60, 0, 180, 22); 
-      u8g2.setDrawColor(0); 
-      u8g2.setFont(u8g2_font_profont17_tr);
-      u8g2.drawStr(66, 17, state.warningMsg);
-      u8g2.setDrawColor(1); 
-  }
 }
 
 void setup() {
@@ -782,7 +752,7 @@ void evaluateWarnings(VehicleData& state) {
   // Names matching the physical channels assigned in pdu.c
   const char* efuseNames[8] = {
     "HYBRID", "VENT 1", "VENT 2", "IGN/INJ", 
-    "FUEL PUMP", "WATER P1", "WATER P2", "12V AUX"
+    "FUELPUMP", "WATER P1", "WATER P2", "12V AUX"
   };
   
   for (int i = 0; i < 8; i++) {
@@ -800,7 +770,7 @@ void evaluateWarnings(VehicleData& state) {
     // Is the pop-up currently active and inside its 3000ms window?
     if (popupTriggered[i] && (currentMillis - popupTimer[i] < POPUP_DURATION)) {
       static char efuseMsg[24];
-      snprintf(efuseMsg, sizeof(efuseMsg), "ERR: %s FLT", efuseNames[i]);
+      snprintf(efuseMsg, sizeof(efuseMsg), "ERR: %s FAULT", efuseNames[i]);
       state.hasWarning = true;
       state.warningMsg = efuseMsg;
       
