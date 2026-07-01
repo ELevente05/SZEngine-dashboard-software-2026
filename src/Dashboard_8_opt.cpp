@@ -1,6 +1,7 @@
 /*
  * ESP32-S3-N16R8 Receiver Dashboard
  * Refactored for FreeRTOS Safety, Concurrency, and Automotive Robustness
+ * Updated to include PDU Error Handling
  */
 
 #include <Arduino.h>
@@ -151,7 +152,7 @@ struct VehicleData {
   float boostPressure = 0.3f;
   
   float oilTemp = 97.0f;
-  float oilPress = 2.4f;
+  float oilPress = 53.4f;
   float engineWaterTemp = 89.8f;
   float icWaterTemp = 69.0f;
   float lambdaVal = 0.98f;
@@ -172,6 +173,11 @@ struct VehicleData {
 
   bool hasWarning = false;
   const char* warningMsg = nullptr; 
+
+  // PDU Error States
+  bool pduVoltError = false;
+  bool pduPowerError = false;
+  bool pduFetError = false;
 };
 
 // Global State and Mutex to prevent data tearing across CPU Cores
@@ -192,7 +198,6 @@ constexpr uint32_t CAN_ID_ACTIVE_SCREEN = 0x524;
 // Safe Little Endian Parser
 inline int16_t parseLE(const uint8_t* data, int offset) { 
   uint16_t raw_val = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
-  //return static_cast<int16_t>(raw_val); 
   return raw_val;
 }
 
@@ -209,56 +214,40 @@ void TaskCANcode(void * pvParameters) {
         switch (rx_msg.identifier) {
 
           case 0x520: // RPM, MAP/Boost, Lambda
-            //if (rx_msg.data_length_code >= 8) { 
               globalVehicleState.rpm = parseLE(rx_msg.data, 0); 
               globalVehicleState.boostPressure = (parseLE(rx_msg.data, 4) * 0.001f) - 1;
               globalVehicleState.lambdaVal = parseLE(rx_msg.data, 6); 
-            //}
             break;
             
           case 0x524: // ACTIVE SCREEN
-            //if (rx_msg.data_length_code >= 1) {
               globalVehicleState.activeScreen = rx_msg.data[0];
-            //}
             break;
 
           case 0x530: // Battery Volts, Intake Temp
-            //if (rx_msg.data_length_code >= 6) {
               globalVehicleState.batteryVolts = parseLE(rx_msg.data, 0) * 0.01f;
               globalVehicleState.intakeTemp = parseLE(rx_msg.data, 4) * 0.1f;
-            //}
             break;
 
           case 0x531: // EGT 1
-            //if (rx_msg.data_length_code >= 8) {
               globalVehicleState.egt = parseLE(rx_msg.data, 6);
-            //}
             break;
 
           case 0x532: // IC Water Temp
-            //if (rx_msg.data_length_code >= 6) {
               globalVehicleState.icWaterTemp = static_cast<float>(parseLE(rx_msg.data, 4));
-            //}
             break;
             
           case 0x533: // Engine Water Temp
-            //if (rx_msg.data_length_code >= 1) {
               globalVehicleState.engineWaterTemp = static_cast<float>(parseLE(rx_msg.data, 0) * 0.1f);
-            //}
             break;
 
           case 0x538: // Engine Oil Press, Engine Oil Temp
-            //if (rx_msg.data_length_code >= 4) {
               globalVehicleState.oilPress = static_cast<float>(parseLE(rx_msg.data, 0)) * 0.1f;
               globalVehicleState.oilTemp = static_cast<float>(parseLE(rx_msg.data, 2)) * 0.1f;
-            //}
             break;
 
           case 0x543: // Current Gear
-            //if (rx_msg.data_length_code >= 1) {
               globalVehicleState.currentGear = rx_msg.data[0]; 
               Serial.print(rx_msg.data[0]);
-            //}
             break;
 
           case 0x600: // Temps 1-4
@@ -321,6 +310,16 @@ void TaskCANcode(void * pvParameters) {
               globalVehicleState.V_10 = parseLE(rx_msg.data, 2) * 0.1f;
               globalVehicleState.V_out = parseLE(rx_msg.data, 4) * 0.1f;
               globalVehicleState.I_out = parseLE(rx_msg.data, 6) * 0.1f;
+            }
+            break;
+
+          case 0x620: // PDU Error Status (Assumes external TX task on PDU side)
+            if (rx_msg.data_length_code >= 1) {
+              // Bit 0: Voltage Error, Bit 1: Power Error, Bit 2: FET Error
+              // Assumes PDU sends a '1' when an error is present
+              globalVehicleState.pduVoltError  = (rx_msg.data[0] & 0x01) != 0;
+              globalVehicleState.pduPowerError = (rx_msg.data[0] & 0x02) != 0;
+              globalVehicleState.pduFetError   = (rx_msg.data[0] & 0x04) != 0;
             }
             break;
         }
@@ -482,7 +481,6 @@ void drawScreen1(const VehicleData& state) {
     snprintf(textBuf, sizeof(textBuf), "%.2f", state.batteryVolts);
     u8g2.drawStr(104, 17, textBuf);
     
-
     u8g2.drawStr(63, 38, "WATR");
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.engineWaterTemp);
     u8g2.drawStr(104, 38, textBuf);
@@ -510,7 +508,6 @@ void drawScreen1(const VehicleData& state) {
 
     snprintf(textBuf, sizeof(textBuf), "%d", state.rpm);
     u8g2.drawStr(64, 81, textBuf);
-
     
     snprintf(textBuf, sizeof(textBuf), "%d", state.speed);
     u8g2.drawStr(64, 126, textBuf);
@@ -542,6 +539,7 @@ void drawScreen2(const VehicleData& state) {
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
 
+  u8g2.drawFrame(0, 0, 240, 128);
   u8g2.drawLine(0, 42, 239, 42);
   u8g2.drawLine(0, 84, 239, 84);
   u8g2.drawLine(59, 0, 59, 127);
@@ -549,10 +547,10 @@ void drawScreen2(const VehicleData& state) {
   u8g2.drawLine(180, 0, 180, 127);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(8, 15, "Oil T");
-  u8g2.drawStr(68, 15, "Oil P");
+  u8g2.drawStr(10, 15, "Oil T");
+  u8g2.drawStr(69, 15, "Oil P");
   u8g2.drawStr(122, 15, "EWaterT");
-  u8g2.drawStr(183, 15, "RPM");
+  u8g2.drawStr(198, 15, "RPM");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.oilTemp); u8g2.drawStr(5, 35, textBuffer);
@@ -561,25 +559,26 @@ void drawScreen2(const VehicleData& state) {
   snprintf(textBuffer, sizeof(textBuffer), "%d", state.rpm); u8g2.drawStr(187, 35, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(4, 58, "Lambda");
+  u8g2.drawStr(5, 58, "Lambda");
   u8g2.drawStr(61, 58, "IntakeT");
   u8g2.drawStr(135, 58, "EGT");
-  u8g2.drawStr(183, 58, "Battery");
+  u8g2.drawStr(186, 58, "12VOLT");
 
   u8g2.setFont(u8g2_font_profont22_tr);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.lambdaVal); u8g2.drawStr(4, 77, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.intakeTemp); u8g2.drawStr(62, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.intakeTemp); u8g2.drawStr(65, 77, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.egt); u8g2.drawStr(121, 77, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.batteryVolts); u8g2.drawStr(182, 77, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(62, 100, "HybridT");
-  u8g2.drawStr(123, 100, "HybridV");
-  u8g2.drawStr(195, 100, "Gear");
+  u8g2.drawStr(10, 99, "Boost");
+  u8g2.drawStr(62, 99, "HybridT");
+  u8g2.drawStr(123, 99, "HybridV");
+  u8g2.drawStr(195, 99, "Gear");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.boostPressure); u8g2.drawStr(4, 120, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.hybridTemp); u8g2.drawStr(62, 120, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.boostPressure); u8g2.drawStr(11, 120, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.hybridTemp); u8g2.drawStr(66, 120, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.hybridVolts); u8g2.drawStr(121, 120, textBuffer);
   snprintf(textBuffer, sizeof(textBuffer), "%d", state.currentGear); u8g2.drawStr(205, 120, textBuffer);
 }
@@ -590,6 +589,7 @@ void drawScreen3(const VehicleData& state) {
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
   
+  u8g2.drawFrame(0, 0, 240, 128);
   u8g2.drawLine(0, 31, 239, 31);
   u8g2.drawLine(0, 63, 239, 63);
   u8g2.drawLine(0, 95, 239, 95);
@@ -639,7 +639,8 @@ void drawScreen4(const VehicleData& state) {
   char textBuffer[16];
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
-  
+
+  u8g2.drawFrame(0, 0, 240, 128);  
   u8g2.drawLine(0, 42, 239, 42);
   u8g2.drawLine(0, 84, 239, 84);
   u8g2.drawLine(59, 0, 59, 127);
@@ -733,8 +734,27 @@ void setup() {
   Serial.begin(115200);
   
   globalVehicleState.hasWarning = false;
-  globalVehicleState.warningMsg = "THE CAKE IS A LIE";
+  globalVehicleState.warningMsg = nullptr;
+}
 
+// --- PDU WARNING EVALUATOR ---
+void evaluateWarnings(VehicleData& state) {
+  // Prioritize warnings. FET failure is usually the most critical, 
+  // followed by Voltage, then Power calculation discrepancies.
+  if (state.pduFetError) {
+    state.hasWarning = true;
+    state.warningMsg = "ERR: PDU FET FAULT";
+  } else if (state.pduVoltError) {
+    state.hasWarning = true;
+    state.warningMsg = "ERR: PDU LOW VOLT";
+  } else if (state.pduPowerError) {
+    state.hasWarning = true;
+    state.warningMsg = "ERR: PDU PWR CALC";
+  } else {
+    // If no flags are set, clear the warning
+    state.hasWarning = false;
+    state.warningMsg = nullptr;
+  }
 }
 
 void loop() {
@@ -745,27 +765,30 @@ void loop() {
     VehicleData localState; // Safe snapshot of the state
 
     // Attempt to lock data structure to copy it
-    //if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
       localState = globalVehicleState; // Atomically copy data
-    //  xSemaphoreGive(stateMutex);
-    //} else {
-    //1  return; // Skip drawing this frame to prevent screen tearing if data is busy
-    //}
+      xSemaphoreGive(stateMutex);
+    } else {
+      return; // Skip drawing this frame to prevent screen tearing if data is busy
+    }
+
+    // --- Evaluate warning states before drawing ---
+    evaluateWarnings(localState);
 
     updateLEDs(localState.rpm);
     u8g2.clearBuffer();          
     
     // Pass the frozen snapshot to rendering functions
-    //if (localState.activeScreen == 1) {
+    if (localState.activeScreen == 1) {
       drawScreen1(localState); 
     
-    /*,} else if (localState.activeScreen == 2) {
+    } else if (localState.activeScreen == 2) {
       drawScreen2(localState);
     } else if (localState.activeScreen == 3) {
       drawScreen3(localState);
     } else if (localState.activeScreen == 4) {
       drawScreen4(localState);
-    }*/
+    }
     
     u8g2.sendBuffer();          
   }
