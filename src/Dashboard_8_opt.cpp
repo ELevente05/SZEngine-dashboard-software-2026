@@ -12,6 +12,7 @@
 #define SPI_CS    10
 #define SPI_DC    9
 #define SPI_RESET 8
+#define BACKLIGHT_PIN 4
 
 #define CAN_TX_PIN 47
 #define CAN_RX_PIN 48
@@ -59,27 +60,32 @@ void DG_Init() {
 }
 
 void DG_DrawFrame() {
+    if (DG_ScreenBuffer == nullptr) {
+        return;
+    }
+
     u8g2.clearBuffer();
 
-    // Downscale DOOM's 320x200 32-bit color frame to 240x128 1-bit monochrome
-    for (int y = 0; y < 128; y++) {
-        int srcY = (y * 200) / 128; 
-        
-        for (int x = 0; x < 240; x++) {
-            int srcX = (x * 320) / 240;
-            uint32_t color = DG_ScreenBuffer[srcY * 320 + srcX];
+    const int dstW = 240;
+    const int dstH = 128;
+    const int srcW = DOOMGENERIC_RESX;
+    const int srcH = DOOMGENERIC_RESY;
 
+    for (int y = 0; y < dstH; ++y) {
+        int srcY = (y * srcH) / dstH;
+        for (int x = 0; x < dstW; ++x) {
+            int srcX = (x * srcW) / dstW;
+            uint32_t color = DG_ScreenBuffer[srcY * srcW + srcX];
             uint8_t r = (color >> 16) & 0xFF;
             uint8_t g = (color >> 8) & 0xFF;
             uint8_t b = color & 0xFF;
-
-            // Calculate luminance and apply threshold for black & white
             uint8_t luminance = (r * 77 + g * 150 + b * 29) >> 8;
-            if (luminance > 75) { 
+            if (luminance > 90) {
                 u8g2.drawPixel(x, y);
             }
         }
     }
+
     u8g2.sendBuffer();
 }
 
@@ -129,8 +135,30 @@ void setup() {
     Serial.println("Starting Dashboard DOOM...");
 
     // 1. Start Display
+    pinMode(BACKLIGHT_PIN, OUTPUT); 
+    digitalWrite(BACKLIGHT_PIN, HIGH);
+
+    pinMode(SPI_RESET, OUTPUT);
+    digitalWrite(SPI_RESET, LOW);
+    delay(10);
+    digitalWrite(SPI_RESET, HIGH);
+    delay(50);
+
     u8g2.begin();
-    u8g2.setContrast(150);
+    u8g2.setPowerSave(0);
+    u8g2.setContrast(255);
+    u8g2.setDisplayRotation(U8G2_R0);
+
+    u8g2.clearBuffer();
+    u8g2.setDrawColor(1);
+    for (int y = 0; y < 128; y += 16) {
+        for (int x = 0; x < 240; x += 16) {
+            u8g2.drawBox(x, y, 8, 8);
+        }
+    }
+    u8g2.drawFrame(0, 0, 240, 128);
+    u8g2.sendBuffer();
+    delay(1000);
 
     // 2. Start LittleFS (Hard Drive)
     if (!LittleFS.begin()) {

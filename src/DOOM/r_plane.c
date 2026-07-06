@@ -50,7 +50,7 @@ visplane_t*		ceilingplane;
 
 // ?
 #define MAXOPENINGS	SCREENWIDTH*64
-short			openings[MAXOPENINGS];
+short*	openings;
 short*			lastopening;
 
 

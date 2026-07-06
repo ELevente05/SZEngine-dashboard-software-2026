@@ -81,11 +81,12 @@ void I_Sleep(int ms)
 	DG_SleepMs(ms);
 }
 
+#if 0
 void I_WaitVBL(int count)
 {
     //I_Sleep((count * 1000) / 70);
 }
-
+#endif
 
 void I_InitTimer(void)
 {

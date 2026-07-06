@@ -402,6 +402,7 @@ boolean D_GrabMouseCallback(void)
     return (gamestate == GS_LEVEL) && !demoplayback && !advancedemo;
 }
 
+#if 0
 void doomgeneric_Tick()
 {
     // frame syncronous IO operations
@@ -417,6 +418,7 @@ void doomgeneric_Tick()
         D_Display ();
     }
 }
+#endif
 
 //
 //  D_DoomLoop
