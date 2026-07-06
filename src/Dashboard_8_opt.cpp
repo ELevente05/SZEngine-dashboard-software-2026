@@ -364,10 +364,8 @@ void updateLEDs(int currentRpm) {
   strip.clear(); 
 
   if (redline) {
-    if ((millis() / 50) % 2 == 0) {
       for(int i = 0; i < NUM_LEDS; i++) {
         strip.setPixelColor(i, strip.Color(0, 0, 255));
-      }
     }
   } else {
     for (int i = 0; i < NUM_LEDS; i++) {
@@ -685,13 +683,13 @@ void setup() {
     while(true); // Hard fault if OS fails to create mutex
   }
 
-  strip.begin(); 
+  strip.begin();
   strip.setBrightness(50);
-  strip.clear(); 
+  strip.clear();
   strip.show();
   
-  u8g2.begin(); 
-  u8g2.setContrast(150); 
+  u8g2.begin();
+  u8g2.setContrast(150);
   
   u8g2.clearBuffer();
   u8g2.setFontMode(1);
