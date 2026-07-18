@@ -1,5 +1,7 @@
 /*
  * ESP32-S3-N16R8 Receiver Dashboard
+ * Refactored for FreeRTOS Safety, Concurrency, and Automotive Robustness
+ * Updated to include per-eFuse 3-Second Pop-Up Warnings
  */
 
 #include <Arduino.h>
@@ -7,7 +9,6 @@
 #include <math.h>
 #include "driver/twai.h"
 #include <Adafruit_NeoPixel.h>
-#include "standalone_replay.h"
 
 // --- PIN CONFIG ---
 #define SPI_SCK   12
@@ -140,133 +141,208 @@ static const unsigned char PROGMEM SZEngine_title[756] = {
   0xFF,0xFF,0xFF,0xF3,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x0F,0x00,0x80,0x7F,0xFC,0xFF,0xFF,0xE7,0x1F,0x00,0x00,0xFE,0xF1,0xFF,0xFF,0x00,0x00
 };
 
-// --- VARIABLES ---
-volatile int activeScreen = 1; 
+// --- DATA STRUCTURE (Thread-Safe Representation) ---
+struct VehicleData {
+  int activeScreen = 1; 
 
-// Screen 1 & 2
-volatile float oilTemp = 97.0;
-volatile float oilPress = 2.4;
-volatile float engineWaterTemp = 89.8;
-volatile float icWaterTemp = 69.0;
-volatile float lambdaVal = 0.98;
-volatile float intakeTemp = 43.8;
-volatile float egt = 490.0;
-volatile float batteryVolts = 13.3;
-volatile float boostPressure = 0.3;
-volatile float hybridTemp = 26.34;
-volatile float hybridVolts = 39.6;
-volatile int currentGear = 0;
-volatile int stateOfCharge = 400;
-volatile int rpm = 4000;
-// Screen 3
-volatile float T_1 = 26.02, T_2 = 25.94, T_3 = 25.86, T_4 = 25.88;
-volatile float T_5 = 25.82, T_6 = 26.17, T_7 = 25.94, T_8 = 26.34;
-volatile float T_9 = 25.73, T_10 = 26.09, T_11 = 25.61, T_12 = 26.42;
-volatile float T_13 = 25.50, T_14 = 26.25, T_15 = 25.75, T_16 = 26.50;
+  int rpm = 4000;
+  int speed = 0;       
+  int currentGear = 0; 
+  float stateOfCharge = 400.0f;
+  float boostPressure = 0.3f;
+  
+  float oilTemp = 97.0f;
+  float oilPress = 53.4f;
+  float engineWaterTemp = 89.8f;
+  float icWaterTemp = 69.0f;
+  float lambdaVal = 0.98f;
+  float intakeTemp = 43.8f;
+  float egt = 490.0f;
+  float batteryVolts = 13.3f;
+  float hybridTemp = 26.5f;
+  float hybridVolts = 41.85f;
 
-// Screen 4
-volatile float V_1 = 4.13, V_2 = 4.14, V_3 = 4.15, V_4 = 4.16;
-volatile float V_5 = 4.17, V_6 = 4.18, V_7 = 4.19, V_8 = 4.13;
-volatile float V_9 = 4.20, V_10 = 4.20, V_out = 41.85, I_out = 0.0;
+  float T_1 = 26.0f, T_2 = 25.9f, T_3 = 25.9f, T_4 = 25.9f;
+  float T_5 = 25.8f, T_6 = 26.2f, T_7 = 25.9f, T_8 = 26.3f;
+  float T_9 = 25.7f, T_10 = 26.1f, T_11 = 25.6f, T_12 = 26.4f;
+  float T_13 = 25.5f, T_14 = 26.3f, T_15 = 25.8f, T_16 = 26.5f;
 
+  float V_1 = 4.13f, V_2 = 4.14f, V_3 = 4.15f, V_4 = 4.16f;
+  float V_5 = 4.17f, V_6 = 4.18f, V_7 = 4.19f, V_8 = 4.13f;
+  float V_9 = 4.20f, V_10 = 4.20f, V_all = 41.85f, I_out = 0.0f;
+
+  bool hasWarning = false;
+  const char* warningMsg = nullptr; 
+
+  // --- PDU Error States ---
+  bool pduVoltError = false;
+  bool pduPowerError = false;
+  bool pduFetError = false;
+
+  // --- eFuse Instantaneous Fault Flags ---
+  bool efuseFaultActive[8] = {false};
+};
+
+// Global State and Mutex to prevent data tearing across CPU Cores
+VehicleData globalVehicleState;
+SemaphoreHandle_t stateMutex;
 
 // --- SETTINGS & TIMERS ---
-int rpmStart = 4000; 
-int rpmMax = 7000;   
+constexpr int rpmStart = 3000;
+constexpr int rpmMax = 9500;
 unsigned long lastScreenUpdate = 0; 
 
 // --- TASK HANDLE ---
 TaskHandle_t TaskCAN;
 
 // --- HELPERS ---
-constexpr uint32_t CAN_ID_MAIN_STATUS_1 = 0x520;
-constexpr uint32_t CAN_ID_MAIN_STATUS_2 = 0x521;
-constexpr uint32_t CAN_ID_MAIN_STATUS_3 = 0x522;
-constexpr uint32_t CAN_ID_MAIN_STATUS_4 = 0x523;
 constexpr uint32_t CAN_ID_ACTIVE_SCREEN = 0x524;
 
-int16_t parseBE(const uint8_t* data, int offset) { return (data[offset] << 8) | data[offset + 1]; }
+// Safe Little Endian Parser
+inline int16_t parseLE(const uint8_t* data, int offset) { 
+  uint16_t raw_val = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
+  return raw_val;
+}
 
 // =========================================================================
 // --- CORE 0: DEDICATED CAN BUS TASK ---
 // =========================================================================
 void TaskCANcode(void * pvParameters) {
-  //Serial.print("CAN Task Successfully Booted on Core: ");
-  //Serial.println(xPortGetCoreID());
-
   for(;;) { // Infinite FreeRTOS Loop
     twai_message_t rx_msg;
     
-    while (twai_receive(&rx_msg, pdMS_TO_TICKS(1)) == ESP_OK) {
-      switch (rx_msg.identifier) {
-        case CAN_ID_MAIN_STATUS_1:
-          rpm = parseBE(rx_msg.data, 0); 
-          lambdaVal = parseBE(rx_msg.data, 2) * 0.001f;
-          boostPressure = parseBE(rx_msg.data, 4) * 0.001f;
-          currentGear = rx_msg.data[6];
-          stateOfCharge = rx_msg.data[7];
-          break;
-        case CAN_ID_MAIN_STATUS_2:
-          batteryVolts = parseBE(rx_msg.data, 0) * 0.01f;
-          intakeTemp = parseBE(rx_msg.data, 2) * 0.1f;
-          engineWaterTemp = parseBE(rx_msg.data, 4) * 0.1f;
-          icWaterTemp = parseBE(rx_msg.data, 6) * 0.1f;
-          break;
-        case CAN_ID_MAIN_STATUS_3:
-          oilPress = parseBE(rx_msg.data, 0) * 0.001f;
-          oilTemp = parseBE(rx_msg.data, 2) * 0.1f;
-          egt = parseBE(rx_msg.data, 4) * 1.0f;
-          hybridTemp = parseBE(rx_msg.data, 6) * 0.01f;
-          break;
-        case CAN_ID_MAIN_STATUS_4:
-          hybridVolts = parseBE(rx_msg.data, 0) * 0.01f;
-          break;
-        case CAN_ID_ACTIVE_SCREEN:
-          activeScreen = rx_msg.data[0];
-          break;
+    if (twai_receive(&rx_msg, pdMS_TO_TICKS(1)) == ESP_OK) {
+      // Lock data structure to update safely
+      if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+        switch (rx_msg.identifier) {
 
-        case 0x600:
-          T_1 = parseBE(rx_msg.data, 0) * 0.1;
-          T_2 = parseBE(rx_msg.data, 2) * 0.1;
-          T_3 = parseBE(rx_msg.data, 4) * 0.1;
-          T_4 = parseBE(rx_msg.data, 6) * 0.1;
-          break;
-        case 0x601:
-          T_5 = parseBE(rx_msg.data, 0) * 0.1;
-          T_6 = parseBE(rx_msg.data, 2) * 0.1;
-          T_7 = parseBE(rx_msg.data, 4) * 0.1;
-          T_8 = parseBE(rx_msg.data, 6) * 0.1;
-          break;
-        case 0x602:
-          T_9 = parseBE(rx_msg.data, 0) * 0.1;
-          T_10 = parseBE(rx_msg.data, 2) * 0.1;
-          T_11 = parseBE(rx_msg.data, 4) * 0.1;
-          T_12 = parseBE(rx_msg.data, 6) * 0.1;
-          break;
-        case 0x603:
-          T_13 = parseBE(rx_msg.data, 0) * 0.1;
-          T_14 = parseBE(rx_msg.data, 2) * 0.1;
-          T_15 = parseBE(rx_msg.data, 4) * 0.1;
-          T_16 = parseBE(rx_msg.data, 6) * 0.1;
-          break;
-        case 0x610:
-          V_1 = parseBE(rx_msg.data, 0) * 0.1;
-          V_2 = parseBE(rx_msg.data, 2) * 0.1;
-          V_3 = parseBE(rx_msg.data, 4) * 0.1;
-          V_4 = parseBE(rx_msg.data, 6) * 0.1;
-          break;
-        case 0x611:
-          V_5 = parseBE(rx_msg.data, 0) * 0.1;
-          V_6 = parseBE(rx_msg.data, 2) * 0.1;
-          V_7 = parseBE(rx_msg.data, 4) * 0.1;
-          V_8 = parseBE(rx_msg.data, 6) * 0.1;
-          break;
-        case 0x612:
-          V_9 = parseBE(rx_msg.data, 0) * 0.1;
-          V_10 = parseBE(rx_msg.data, 2) * 0.1;
-          V_out = parseBE(rx_msg.data, 4) * 0.1;
-          I_out = parseBE(rx_msg.data, 6) * 0.1;
-          break;
+          case 0x520: // RPM, MAP/Boost, Lambda
+              globalVehicleState.rpm = parseLE(rx_msg.data, 0); 
+              globalVehicleState.boostPressure = (parseLE(rx_msg.data, 4) * 0.001f) - 1;
+              globalVehicleState.lambdaVal = parseLE(rx_msg.data, 6); 
+            break;
+            
+          case 0x524: // ACTIVE SCREEN
+              globalVehicleState.activeScreen = rx_msg.data[0];
+            break;
+
+          case 0x530: // Battery Volts, Intake Temp
+              globalVehicleState.batteryVolts = parseLE(rx_msg.data, 0) * 0.01f;
+              globalVehicleState.intakeTemp = parseLE(rx_msg.data, 4) * 0.1f;
+            break;
+
+          case 0x531: // EGT 1
+              globalVehicleState.egt = parseLE(rx_msg.data, 6);
+            break;
+
+          case 0x532: // IC Water Temp
+              globalVehicleState.icWaterTemp = static_cast<float>(parseLE(rx_msg.data, 4));
+            break;
+            
+          case 0x533: // Engine Water Temp
+              globalVehicleState.engineWaterTemp = static_cast<float>(parseLE(rx_msg.data, 0) * 0.1f);
+            break;
+
+          case 0x538: // Engine Oil Press, Engine Oil Temp
+              globalVehicleState.oilPress = static_cast<float>(parseLE(rx_msg.data, 0)) * 0.1f;
+              globalVehicleState.oilTemp = static_cast<float>(parseLE(rx_msg.data, 2)) * 0.1f;
+            break;
+
+          case 0x543: // Current Gear
+              globalVehicleState.currentGear = rx_msg.data[0]; 
+              globalVehicleState.speed = rx_msg.data[1];
+
+            break;
+
+          case 0x600: // Temps 1-4
+            if (rx_msg.data_length_code >= 8) {
+              globalVehicleState.T_1 = parseLE(rx_msg.data, 0) * 0.1f;
+              globalVehicleState.T_2 = parseLE(rx_msg.data, 2) * 0.1f;
+              globalVehicleState.T_3 = parseLE(rx_msg.data, 4) * 0.1f;
+              globalVehicleState.T_4 = parseLE(rx_msg.data, 6) * 0.1f;
+            }
+            break;
+
+          case 0x601: // Temps 5-8
+            if (rx_msg.data_length_code >= 8) {
+              globalVehicleState.T_5 = parseLE(rx_msg.data, 0) * 0.1f;
+              globalVehicleState.T_6 = parseLE(rx_msg.data, 2) * 0.1f;
+              globalVehicleState.T_7 = parseLE(rx_msg.data, 4) * 0.1f;
+              globalVehicleState.T_8 = parseLE(rx_msg.data, 6) * 0.1f;
+            }
+            break;
+
+          case 0x602: // Temps 9-12
+            if (rx_msg.data_length_code >= 8) {
+              globalVehicleState.T_9 = parseLE(rx_msg.data, 0) * 0.1f;
+              globalVehicleState.T_10 = parseLE(rx_msg.data, 2) * 0.1f;
+              globalVehicleState.T_11 = parseLE(rx_msg.data, 4) * 0.1f;
+              globalVehicleState.T_12 = parseLE(rx_msg.data, 6) * 0.1f;
+            }
+            break;
+
+          case 0x603: // Temps 13-16
+            if (rx_msg.data_length_code >= 8) {
+              globalVehicleState.T_13 = parseLE(rx_msg.data, 0) * 0.1f;
+              globalVehicleState.T_14 = parseLE(rx_msg.data, 2) * 0.1f;
+              globalVehicleState.T_15 = parseLE(rx_msg.data, 4) * 0.1f;
+              globalVehicleState.T_16 = parseLE(rx_msg.data, 6) * 0.1f;
+            }
+            break;
+
+          case 0x610: // Volts 1-4
+            if (rx_msg.data_length_code >= 8) {
+              globalVehicleState.V_1 = parseLE(rx_msg.data, 0) * 0.1f;
+              globalVehicleState.V_2 = parseLE(rx_msg.data, 2) * 0.1f;
+              globalVehicleState.V_3 = parseLE(rx_msg.data, 4) * 0.1f;
+              globalVehicleState.V_4 = parseLE(rx_msg.data, 6) * 0.1f;
+            }
+            break;
+
+          case 0x611: // Volts 5-8
+            if (rx_msg.data_length_code >= 8) {
+              globalVehicleState.V_5 = parseLE(rx_msg.data, 0) * 0.1f;
+              globalVehicleState.V_6 = parseLE(rx_msg.data, 2) * 0.1f;
+              globalVehicleState.V_7 = parseLE(rx_msg.data, 4) * 0.1f;
+              globalVehicleState.V_8 = parseLE(rx_msg.data, 6) * 0.1f;
+            }
+            break;
+
+          case 0x612: // Volts 9-10 & Output
+            if (rx_msg.data_length_code >= 8) {
+              globalVehicleState.V_9 = parseLE(rx_msg.data, 0) * 0.1f;
+              globalVehicleState.V_10 = parseLE(rx_msg.data, 2) * 0.1f;
+              globalVehicleState.V_all = parseLE(rx_msg.data, 4) * 0.1f;
+              globalVehicleState.I_out = parseLE(rx_msg.data, 6) * 0.1f;
+            }
+            break;
+
+          case 0x620: // PDU Global Error Status
+            if (rx_msg.data_length_code >= 1) {
+              globalVehicleState.pduVoltError  = (rx_msg.data[0] & 0x01) != 0;
+              globalVehicleState.pduPowerError = (rx_msg.data[0] & 0x02) != 0;
+              globalVehicleState.pduFetError   = (rx_msg.data[0] & 0x04) != 0;
+            }
+            break;
+
+          // --- Per-eFuse Fault Data (0x710 to 0x717) ---
+          case 0x710: case 0x711: case 0x712: case 0x713:
+          case 0x714: case 0x715: case 0x716: case 0x717:
+            if (rx_msg.data_length_code >= 8) {
+              int channel = rx_msg.identifier - 0x710;
+              
+              // Byte 6 (low) and Byte 7 (high) form the PMBus status word
+              uint16_t status_word = parseLE(rx_msg.data, 6);
+              
+              // PMBus fault bitmask (combines Over-Voltage, Over-Current, Under-Voltage, Temp, CML, etc.)
+              const uint16_t FAULT_MASK = 0x703F; 
+              
+              globalVehicleState.efuseFaultActive[channel] = ((status_word & FAULT_MASK) != 0);
+            }
+            break;
+        }
+        
+        xSemaphoreGive(stateMutex);
       }
     }
   }
@@ -276,24 +352,22 @@ void TaskCANcode(void * pvParameters) {
 // --- CORE 1: GRAPHICS & MAIN LOOP ---
 // =========================================================================
 
-void updateLEDs() {
+void updateLEDs(int currentRpm) {
   int numLedsToLight = 0;
   bool redline = false;
 
-  if (rpm >= rpmMax) {
+  if (currentRpm >= rpmMax) {
     redline = true;
-  } else if (rpm >= rpmStart) {
-    numLedsToLight = (int)((rpm - rpmStart) * NUM_LEDS / (float)(rpmMax - rpmStart)) + 1;
+  } else if (rpmMax > rpmStart && currentRpm >= rpmStart) { 
+    numLedsToLight = static_cast<int>((currentRpm - rpmStart) * NUM_LEDS / static_cast<float>(rpmMax - rpmStart)) + 1;
     if (numLedsToLight > NUM_LEDS) numLedsToLight = NUM_LEDS;
   }
 
   strip.clear(); 
 
   if (redline) {
-    if ((millis() / 50) % 2 == 0) {
       for(int i = 0; i < NUM_LEDS; i++) {
         strip.setPixelColor(i, strip.Color(0, 0, 255));
-      }
     }
   } else {
     for (int i = 0; i < NUM_LEDS; i++) {
@@ -321,65 +395,149 @@ void playBootLedAnimation() {
     }
 
     strip.show();
-    delay(120);
+    delay(130);
   }
 
-  delay(1400);
+  delay(1100);
   strip.clear();
   strip.show();
 }
 
 void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float maxVal, float val) {
-  if (val < minVal) val = minVal; 
-  if (val > maxVal) val = maxVal;
-  u8g2.drawCircle(cx, cy, radius); 
-  u8g2.drawCircle(cx, cy, radius - thickness);
-  float start_angle = 2.356; 
-  float end_angle = 7.068;   
-  float target_angle = start_angle + ((val - minVal) / (maxVal - minVal)) * (end_angle - start_angle);
-  for (float a = start_angle; a <= target_angle; a += 0.05) {
-    int x = cx + (radius - thickness/2) * cos(a);
-    int y = cy + (radius - thickness/2) * sin(a);
-    u8g2.drawDisc(x, y, thickness/2);
-  }
+    if (val < minVal) val = minVal; 
+    if (val > maxVal) val = maxVal;
+
+    // 240-degree sweep: 150 degrees (8 o'clock) to 390 degrees (4 o'clock)
+    float start_angle = 2.618f; 
+    float end_angle = 6.807f;   
+    float mid_radius = radius - (thickness / 2.0f);
+
+    // 1. Draw Background Track
+    float step_out = 1.0f / radius;
+    for (float a = start_angle; a <= end_angle; a += step_out) {
+        u8g2.drawPixel(round(cx + radius * cos(a)), round(cy + radius * sin(a)));
+    }
+    float step_in = 1.0f / (radius - thickness);
+    for (float a = start_angle; a <= end_angle; a += step_in) {
+        u8g2.drawPixel(round(cx + (radius - thickness) * cos(a)), round(cy + (radius - thickness) * sin(a)));
+    }
+
+    u8g2.drawCircle(round(cx + mid_radius * cos(start_angle)), round(cy + mid_radius * sin(start_angle)), thickness / 2);
+    u8g2.drawCircle(round(cx + mid_radius * cos(end_angle)), round(cy + mid_radius * sin(end_angle)), thickness / 2);
+
+    // 2. Draw inward-pointing tick marks
+    for (int i = 0; i <= 4; ++i) {
+        float angle = start_angle + i * ((end_angle - start_angle) / 4.0f);
+        int x1 = round(cx + (radius - thickness) * cos(angle));
+        int y1 = round(cy + (radius - thickness) * sin(angle));
+        int x2 = round(cx + (radius - thickness - 5) * cos(angle)); 
+        int y2 = round(cy + (radius - thickness - 5) * sin(angle));
+        u8g2.drawLine(x1, y1, x2, y2);
+    }
+
+    // 3. Fill the active portion
+    float normalizedVal = (val - minVal) / (maxVal - minVal);
+    float target_angle = start_angle + (normalizedVal * (end_angle - start_angle));
+
+    for (int r = radius - thickness; r <= radius; r++) {
+        float step_fill = 1.0f / r; 
+        for (float a = start_angle; a <= target_angle; a += step_fill) {
+            u8g2.drawPixel(round(cx + r * cos(a)), round(cy + r * sin(a)));
+        }
+    }
+
+    // 4. Solid caps
+    u8g2.drawDisc(round(cx + mid_radius * cos(start_angle)), round(cy + mid_radius * sin(start_angle)), thickness / 2);
+    if (normalizedVal > 0.01f) { 
+        u8g2.drawDisc(round(cx + mid_radius * cos(target_angle)), round(cy + mid_radius * sin(target_angle)), thickness / 2);
+    }
 }
 
 // --- SCREEN 1 ---
-void drawScreen1() {
-  char textBuffer[32]; 
-  u8g2.setFont(u8g2_font_logisoso92_tn); 
-  snprintf(textBuffer, sizeof(textBuffer), "%d", currentGear);
-  u8g2.drawStr(95, 125, textBuffer);
-  
-  u8g2.setFontMode(1);
-  u8g2.setBitmapMode(1);
-  u8g2.setFont(u8g2_font_profont22_tr);
-  u8g2.drawStr(20, 24, "Boost");
-  u8g2.drawStr(105, 24, "Gear");
-  u8g2.drawStr(190, 24, "SoC");
-  u8g2.drawStr(161, 104, "Hy.T"); 
+void drawScreen1(const VehicleData& state) {
+    char textBuf[16];
 
-  u8g2.setFont(u8g2_font_profont29_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%d%%", stateOfCharge); 
-  u8g2.drawStr(176, 48, textBuffer);
+    u8g2.setFontMode(1);
+    u8g2.setBitmapMode(1);
 
-  u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", boostPressure);
-  u8g2.drawStr(33, 77, textBuffer);
+    u8g2.drawFrame(0, 0, 240, 128);
+    u8g2.drawFrame(60, 0, 180, 22);
+    u8g2.drawFrame(60, 21, 180, 22);
+    u8g2.drawLine(60, 0, 60, 128);
+    u8g2.drawLine(150, 0, 150, 128);
+    u8g2.drawLine(61, 84, 150, 84);
 
-  u8g2.setFont(u8g2_font_profont22_tf);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f°C", hybridTemp);
-  u8g2.drawUTF8(161, 126, textBuffer); 
+    u8g2.setFont(u8g2_font_profont17_tr);
 
-  drawGauge(50, 70, 40, 10, 0.0, 2.5, boostPressure);
+    u8g2.drawStr(12, 15, "GEAR");
+    u8g2.setFont(u8g2_font_logisoso92_tn);
+    snprintf(textBuf, sizeof(textBuf), "%d", state.currentGear);
+    u8g2.drawStr(0, 119, textBuf);
+
+    u8g2.setFont(u8g2_font_profont17_tr);
+
+    // u8g2.drawStr(66, 17, "SoC");
+    // snprintf(textBuf, sizeof(textBuf), "%.0f%%", state.stateOfCharge);
+    // u8g2.drawStr(110, 17, textBuf);
+
+    u8g2.drawStr(63, 17, "VOLT");
+    snprintf(textBuf, sizeof(textBuf), "%.2f", state.batteryVolts); 
+    u8g2.drawStr(104, 17, textBuf);
+    
+    u8g2.drawStr(63, 38, "WATR");
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.engineWaterTemp);
+    u8g2.drawStr(104, 38, textBuf);
+
+    // u8g2.drawStr(156, 17, "Hy.T");
+    // snprintf(textBuf, sizeof(textBuf), "%.1f", state.hybridTemp);
+    // u8g2.drawStr(199, 17, textBuf);
+
+    u8g2.drawStr(153, 17, "OilP");
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.oilPress);
+    u8g2.drawStr(199, 17, textBuf);
+
+    u8g2.drawStr(153, 38, "OilT");
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.oilTemp);
+    u8g2.drawStr(199, 38, textBuf);
+
+    u8g2.drawStr(182, 120, "BAR");
+    snprintf(textBuf, sizeof(textBuf), "%.1f", state.boostPressure);
+    u8g2.drawStr(182, 106, textBuf);
+
+    u8g2.drawStr(64, 58, "RPM");
+    u8g2.drawStr(64, 100, "KPH");
+
+    u8g2.setFont(u8g2_font_profont29_tr);    
+
+    snprintf(textBuf, sizeof(textBuf), "%d", state.rpm);
+    u8g2.drawStr(64, 81, textBuf);
+    
+    snprintf(textBuf, sizeof(textBuf), "%d", state.speed);
+    u8g2.drawStr(64, 124, textBuf);
+
+    // Center X: 194, Center Y: 84, Radius: 40, Thickness: 10
+    drawGauge(194, 84, 40, 10, 0.0, 2.5, state.boostPressure);
+
+    // =========================================================================
+    // HIGH-PRIORITY POP-UP WARNING
+    // =========================================================================
+    if (state.hasWarning && state.warningMsg != nullptr) {
+        u8g2.setDrawColor(1);
+        u8g2.drawBox(60, 0, 180, 22); // Solid inverse background
+        u8g2.setDrawColor(0); 
+        u8g2.setFont(u8g2_font_profont17_tr);
+        u8g2.drawStr(66, 17, state.warningMsg);
+        u8g2.setDrawColor(1); 
+    }
 }
 
 // --- SCREEN 2 ---
-void drawScreen2() {
+void drawScreen2(const VehicleData& state) {
   char textBuffer[16];
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
 
+  u8g2.drawFrame(0, 0, 240, 128);
   u8g2.drawLine(0, 42, 239, 42);
   u8g2.drawLine(0, 84, 239, 84);
   u8g2.drawLine(59, 0, 59, 127);
@@ -387,48 +545,49 @@ void drawScreen2() {
   u8g2.drawLine(180, 0, 180, 127);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(8, 15, "Oil T");
-  u8g2.drawStr(68, 15, "Oil P");
+  u8g2.drawStr(10, 15, "Oil T");
+  u8g2.drawStr(69, 15, "Oil P");
   u8g2.drawStr(122, 15, "EWaterT");
-  u8g2.drawStr(183, 15, "RPM");
+  u8g2.drawStr(198, 15, "RPM");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", oilTemp); u8g2.drawStr(5, 35, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", oilPress); u8g2.drawStr(65, 35, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", engineWaterTemp); u8g2.drawStr(125, 35, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%d", rpm); u8g2.drawStr(187, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.oilTemp); u8g2.drawStr(5, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.oilPress); u8g2.drawStr(65, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.engineWaterTemp); u8g2.drawStr(125, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%d", state.rpm); u8g2.drawStr(187, 35, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(4, 58, "Lambda");
+  u8g2.drawStr(5, 58, "Lambda");
   u8g2.drawStr(61, 58, "IntakeT");
   u8g2.drawStr(135, 58, "EGT");
-  u8g2.drawStr(183, 58, "Battery");
+  u8g2.drawStr(186, 58, "12VOLT");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", lambdaVal); u8g2.drawStr(4, 77, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", intakeTemp); u8g2.drawStr(62, 77, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", egt); u8g2.drawStr(121, 77, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", batteryVolts); u8g2.drawStr(182, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.lambdaVal); u8g2.drawStr(4, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.intakeTemp); u8g2.drawStr(65, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.egt); u8g2.drawStr(121, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.batteryVolts); u8g2.drawStr(182, 77, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(4, 100, "Boost");
-  u8g2.drawStr(62, 100, "HybridT");
-  u8g2.drawStr(123, 100, "HybridV");
-  u8g2.drawStr(195, 100, "Gear");
+  u8g2.drawStr(10, 99, "Boost");
+  u8g2.drawStr(62, 99, "HybridT");
+  u8g2.drawStr(123, 99, "HybridV");
+  u8g2.drawStr(195, 99, "Gear");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", boostPressure); u8g2.drawStr(4, 120, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", hybridTemp); u8g2.drawStr(62, 120, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", hybridVolts); u8g2.drawStr(121, 120, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%d", currentGear); u8g2.drawStr(205, 120, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.boostPressure); u8g2.drawStr(11, 120, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.hybridTemp); u8g2.drawStr(66, 120, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.hybridVolts); u8g2.drawStr(121, 120, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%d", state.currentGear); u8g2.drawStr(205, 120, textBuffer);
 }
 
 // --- SCREEN 3 ---
-void drawScreen3() {
+void drawScreen3(const VehicleData& state) {
   char textBuffer[16];
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
   
+  u8g2.drawFrame(0, 0, 240, 128);
   u8g2.drawLine(0, 31, 239, 31);
   u8g2.drawLine(0, 63, 239, 63);
   u8g2.drawLine(0, 95, 239, 95);
@@ -437,62 +596,49 @@ void drawScreen3() {
   u8g2.drawLine(180, 0, 180, 127);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 12, "T_1");
-  u8g2.drawStr(77, 12, "T_2");
-  u8g2.drawStr(134, 12, "T_3");
-  u8g2.drawStr(199, 12, "T_4");
+  u8g2.drawStr(18, 12, "T_1"); u8g2.drawStr(77, 12, "T_2"); u8g2.drawStr(134, 12, "T_3"); u8g2.drawStr(199, 12, "T_4");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_1); u8g2.drawStr(0, 30, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_2); u8g2.drawStr(60, 30, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_3); u8g2.drawStr(121, 30, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_4); u8g2.drawStr(182, 30, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_1); u8g2.drawStr(6, 30, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_2); u8g2.drawStr(67, 30, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_3); u8g2.drawStr(127, 30, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_4); u8g2.drawStr(188, 30, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 43, "T_5");
-  u8g2.drawStr(77, 43, "T_6");
-  u8g2.drawStr(135, 43, "T_7");
-  u8g2.drawStr(199, 43, "T_8");
+  u8g2.drawStr(18, 43, "T_5"); u8g2.drawStr(77, 43, "T_6"); u8g2.drawStr(134, 43, "T_7"); u8g2.drawStr(199, 43, "T_8");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_5); u8g2.drawStr(0, 61, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_6); u8g2.drawStr(61, 61, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_7); u8g2.drawStr(121, 61, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_8); u8g2.drawStr(182, 61, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_5); u8g2.drawStr(6, 61, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_6); u8g2.drawStr(67, 61, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_7); u8g2.drawStr(127, 61, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_8); u8g2.drawStr(188, 61, textBuffer);
 
-  // Row 3
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 75, "T_9");
-  u8g2.drawStr(73, 75, "T_10");
-  u8g2.drawStr(130, 75, "T_11");
-  u8g2.drawStr(192, 75, "T_12");
+  u8g2.drawStr(18, 75, "T_9"); u8g2.drawStr(73, 75, "T_10"); u8g2.drawStr(131, 75, "T_11"); u8g2.drawStr(196, 75, "T_12");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_9); u8g2.drawStr(0, 93, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_10); u8g2.drawStr(60, 93, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_11); u8g2.drawStr(121, 93, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_12); u8g2.drawStr(182, 93, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_9); u8g2.drawStr(6, 93, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_10); u8g2.drawStr(67, 93, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_11); u8g2.drawStr(127, 93, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_12); u8g2.drawStr(188, 93, textBuffer);
 
-    // Row 4
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 107, "T_13");
-  u8g2.drawStr(73, 107, "T_14");
-  u8g2.drawStr(130, 107, "T_15");
-  u8g2.drawStr(192, 107, "T_16");
+  u8g2.drawStr(15, 107, "T_13"); u8g2.drawStr(73, 107, "T_14"); u8g2.drawStr(131, 107, "T_15"); u8g2.drawStr(196, 107, "T_16");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_13); u8g2.drawStr(0, 125, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_14); u8g2.drawStr(60, 125, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_15); u8g2.drawStr(121, 125, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", T_16); u8g2.drawStr(182, 125, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_13); u8g2.drawStr(6, 125, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_14); u8g2.drawStr(67, 125, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_15); u8g2.drawStr(127, 125, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.T_16); u8g2.drawStr(188, 125, textBuffer);
 }
 
 // --- SCREEN 4 ---
-void drawScreen4() {
+void drawScreen4(const VehicleData& state) {
   char textBuffer[16];
   u8g2.setFontMode(1);
   u8g2.setBitmapMode(1);
-  
+
+  u8g2.drawFrame(0, 0, 240, 128);  
   u8g2.drawLine(0, 42, 239, 42);
   u8g2.drawLine(0, 84, 239, 84);
   u8g2.drawLine(59, 0, 59, 127);
@@ -500,57 +646,52 @@ void drawScreen4() {
   u8g2.drawLine(180, 0, 180, 127);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 15, "V_1");
-  u8g2.drawStr(77, 15, "V_2");
-  u8g2.drawStr(138, 15, "V_3");
-  u8g2.drawStr(199, 15, "V_4");
+  u8g2.drawStr(15, 15, "V_1"); u8g2.drawStr(77, 15, "V_2"); u8g2.drawStr(138, 15, "V_3"); u8g2.drawStr(199, 15, "V_4");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_1); u8g2.drawStr(0, 35, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_2); u8g2.drawStr(61, 35, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_3); u8g2.drawStr(121, 35, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_4); u8g2.drawStr(182, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_1); u8g2.drawStr(6, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_2); u8g2.drawStr(67, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_3); u8g2.drawStr(127, 35, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_4); u8g2.drawStr(188, 35, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 58, "V_5");
-  u8g2.drawStr(77, 58, "V_6");
-  u8g2.drawStr(138, 58, "V_7");
-  u8g2.drawStr(199, 58, "V_8");
+  u8g2.drawStr(15, 58, "V_5"); u8g2.drawStr(77, 58, "V_6"); u8g2.drawStr(138, 58, "V_7"); u8g2.drawStr(199, 58, "V_8");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_5); u8g2.drawStr(0, 77, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_6); u8g2.drawStr(61, 77, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_7); u8g2.drawStr(121, 77, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_8); u8g2.drawStr(182, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_5); u8g2.drawStr(6, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_6); u8g2.drawStr(67, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_7); u8g2.drawStr(127, 77, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_8); u8g2.drawStr(188, 77, textBuffer);
 
   u8g2.setFont(u8g2_font_t0_16b_tr);
-  u8g2.drawStr(15, 100, "V_9");
-  u8g2.drawStr(74, 100, "V_10");
-  u8g2.drawStr(131, 100, "V_out");
-  u8g2.drawStr(192, 100, "I_out");
+  u8g2.drawStr(15, 100, "V_9"); u8g2.drawStr(74, 100, "V_10"); u8g2.drawStr(131, 100, "V_out"); u8g2.drawStr(192, 100, "I_out");
 
   u8g2.setFont(u8g2_font_profont22_tr);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_9); u8g2.drawStr(0, 121, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_10); u8g2.drawStr(61, 121, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.2f", V_out); u8g2.drawStr(121, 121, textBuffer);
-  snprintf(textBuffer, sizeof(textBuffer), "%.1f", I_out); u8g2.drawStr(182, 121, textBuffer); 
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_9); u8g2.drawStr(6, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_10); u8g2.drawStr(67, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.V_all); u8g2.drawStr(121, 121, textBuffer);
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.I_out); u8g2.drawStr(181, 121, textBuffer); 
 }
 
-
 void setup() {
-  //Serial.begin(115200); 
   delay(500); 
   
   pinMode(BACKLIGHT_PIN, OUTPUT); 
   digitalWrite(BACKLIGHT_PIN, HIGH); 
   
-  strip.begin(); 
+  // Initialize Concurrency
+  stateMutex = xSemaphoreCreateMutex();
+  if (stateMutex == NULL) {
+    while(true); // Hard fault if OS fails to create mutex
+  }
+
+  strip.begin();
   strip.setBrightness(50);
-  strip.clear(); 
+  strip.clear();
   strip.show();
   
-  u8g2.begin(); 
-  u8g2.setContrast(150); 
+  u8g2.begin();
+  u8g2.setContrast(150);
   
   u8g2.clearBuffer();
   u8g2.setFontMode(1);
@@ -561,17 +702,21 @@ void setup() {
 
   playBootLedAnimation();
 
-#ifdef STANDALONE_REPLAY
-  standaloneReplaySetup();
-#else
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
   g_config.rx_queue_len = 20; 
   twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS(); 
   twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
   
-  if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
-    twai_start();
-    //Serial.println("CAN Started Successfully!");
+  // Safe Initialization Trap
+  if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK || twai_start() != ESP_OK) {
+    while (true) {
+      strip.fill(strip.Color(255, 0, 0)); // Flash Red to indicate fatal CAN failure
+      strip.show();
+      vTaskDelay(pdMS_TO_TICKS(500));
+      strip.clear();
+      strip.show();
+      vTaskDelay(pdMS_TO_TICKS(500));
+    }
   }
 
   // --- Start CORE 0 ---
@@ -583,29 +728,102 @@ void setup() {
     10,            /* Priority of the task */
     &TaskCAN,      /* Task handle */
     0);            /* Pin task to core 0 */
-#endif
+
+  Serial.begin(115200);
+  
+  globalVehicleState.hasWarning = false;
+  globalVehicleState.warningMsg = nullptr;
+}
+
+// --- WARNING EVALUATOR (Runs in the UI Thread) ---
+void evaluateWarnings(VehicleData& state) {
+  // Static arrays to track the UI state across loop iterations
+  static bool popupTriggered[8] = {false};
+  static unsigned long popupTimer[8] = {0};
+  const unsigned long POPUP_DURATION = 3000; // Time in milliseconds the pop-up stays visible
+
+  unsigned long currentMillis = millis();
+  
+  // Reset warnings by default
+  state.hasWarning = false;
+  state.warningMsg = nullptr;
+
+  // 1. Evaluate specific eFuse faults first (Highest Priority)
+  // Names matching the physical channels assigned in pdu.c
+  const char* efuseNames[8] = {
+    "HYBRID", "VENT 1", "VENT 2", "IGN/INJ", 
+    "FUELPUMP", "WATER P1", "WATER P2", "12V AUX"
+  };
+  
+  for (int i = 0; i < 8; i++) {
+    // Detect positive fault edge (was healthy, is now faulting)
+    if (state.efuseFaultActive[i]) {
+      if (!popupTriggered[i]) {
+        popupTriggered[i] = true;         // Flag that we caught the error
+        popupTimer[i] = currentMillis;    // Start the 3-second countdown
+      }
+    } else {
+      // Clear trigger so it can re-trigger if the fault goes away and comes back
+      popupTriggered[i] = false;
+    }
+
+    // Is the pop-up currently active and inside its 3000ms window?
+    if (popupTriggered[i] && (currentMillis - popupTimer[i] < POPUP_DURATION)) {
+      static char efuseMsg[24];
+      snprintf(efuseMsg, sizeof(efuseMsg), "ERR: %s FAULT", efuseNames[i]);
+      state.hasWarning = true;
+      state.warningMsg = efuseMsg;
+      
+      // Return immediately so we show this highest priority popup
+      // (If multiple hit simultaneously, it favors the lower index like HYBRID)
+      return; 
+    }
+  }
+
+  // 2. Global PDU Faults (Secondary Priority, constant display)
+  if (state.pduFetError) {
+    state.hasWarning = true;
+    state.warningMsg = "ERR: PDU FET FAULT";
+  } else if (state.pduVoltError) {
+    state.hasWarning = true;
+    state.warningMsg = "ERR: PDU LOW VOLT";
+  } else if (state.pduPowerError) {
+    state.hasWarning = true;
+    state.warningMsg = "ERR: PDU PWR CALC";
+  }
 }
 
 void loop() {
-#ifdef STANDALONE_REPLAY
-  standaloneReplayTick();
-#endif
-
   // --- CORE 1: Screen render ---
   if (millis() - lastScreenUpdate >= 33) {
     lastScreenUpdate = millis();
 
-    updateLEDs();
+    VehicleData localState; // Safe snapshot of the state
+
+    // Attempt to lock data structure to copy it
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      localState = globalVehicleState; // Atomically copy data
+      xSemaphoreGive(stateMutex);
+    } else {
+      return; // Skip drawing this frame to prevent screen tearing if data is busy
+    }
+
+    // --- Evaluate warning states before drawing ---
+    evaluateWarnings(localState);
+
+    updateLEDs(localState.rpm);
     u8g2.clearBuffer();          
     
-    if (activeScreen == 1) {
-      drawScreen1(); 
-    } else if (activeScreen == 2) {
-      drawScreen2();
-    } else if (activeScreen == 3) {
-      drawScreen3();
-    } else if (activeScreen == 4) {
-      drawScreen4();
+    // Pass the frozen snapshot to rendering functions
+    if (localState.activeScreen == 1) {
+      drawScreen1(localState); 
+    
+    } else if (localState.activeScreen == 2) {
+      drawScreen2(localState);
+    } else if (localState.activeScreen == 3) {
+      drawScreen3(localState);
+    } else if (localState.activeScreen == 4) {
+      drawScreen4(localState);
     }
     
     u8g2.sendBuffer();          
