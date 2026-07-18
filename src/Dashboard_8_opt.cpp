@@ -250,6 +250,8 @@ void TaskCANcode(void * pvParameters) {
 
           case 0x543: // Current Gear
               globalVehicleState.currentGear = rx_msg.data[0]; 
+              globalVehicleState.speed = rx_msg.data[1];
+
             break;
 
           case 0x600: // Temps 1-4
