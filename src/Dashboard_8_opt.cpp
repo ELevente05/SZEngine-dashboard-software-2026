@@ -1,7 +1,8 @@
 /*
  * ESP32-S3-N16R8 Receiver Dashboard
  * Refactored for FreeRTOS Safety, Concurrency, and Automotive Robustness
- * Updated to include per-eFuse 3-Second Pop-Up Warnings and BSPD Setup Screen
+ * Updated to include per-eFuse 3-Second Pop-Up Warnings
+ * BSPD Setup Screen included
  */
 
 #include <Arduino.h>
