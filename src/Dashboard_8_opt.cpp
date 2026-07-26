@@ -1,7 +1,7 @@
 /*
  * ESP32-S3-N16R8 Receiver Dashboard
  * Refactored for FreeRTOS Safety, Concurrency, and Automotive Robustness
- * Updated to include per-eFuse 3-Second Pop-Up Warnings
+ * Updated to include per-eFuse 3-Second Pop-Up Warnings and BSPD Setup Screen
  */
 
 #include <Arduino.h>
@@ -143,7 +143,7 @@ static const unsigned char PROGMEM SZEngine_title[756] = {
 
 // --- DATA STRUCTURE (Thread-Safe Representation) ---
 struct VehicleData {
-  int activeScreen = 1; 
+  int activeScreen = 1;
 
   int rpm = 4000;
   int speed = 0;       
@@ -171,15 +171,20 @@ struct VehicleData {
   float V_5 = 4.17f, V_6 = 4.18f, V_7 = 4.19f, V_8 = 4.13f;
   float V_9 = 4.20f, V_10 = 4.20f, V_all = 41.85f, I_out = 0.0f;
 
-  bool hasWarning = false;
-  const char* warningMsg = nullptr; 
+  float tpsPercent = 0.0f;
+  float brakePressKpa = 0.0f;
+  float tpsVoltage = 0.0f;
+  float brakeVoltage = 0.0f;
+  float capturedTpsVoltage = 0.0f;
+  float capturedBrakeVoltage = 0.0f;
+  bool tpsThresholdMet = false;
+  bool brakeThresholdMet = false;
 
-  // --- PDU Error States ---
+  bool hasWarning = false;
+  const char* warningMsg = nullptr;
   bool pduVoltError = false;
   bool pduPowerError = false;
   bool pduFetError = false;
-
-  // --- eFuse Instantaneous Fault Flags ---
   bool efuseFaultActive[8] = {false};
 };
 
@@ -198,7 +203,6 @@ TaskHandle_t TaskCAN;
 // --- HELPERS ---
 constexpr uint32_t CAN_ID_ACTIVE_SCREEN = 0x524;
 
-// Safe Little Endian Parser
 inline int16_t parseLE(const uint8_t* data, int offset) { 
   uint16_t raw_val = static_cast<uint16_t>(data[offset]) | (static_cast<uint16_t>(data[offset + 1]) << 8);
   return raw_val;
@@ -251,7 +255,6 @@ void TaskCANcode(void * pvParameters) {
           case 0x543: // Current Gear
               globalVehicleState.currentGear = rx_msg.data[0]; 
               globalVehicleState.speed = rx_msg.data[1];
-
             break;
 
           case 0x600: // Temps 1-4
@@ -325,18 +328,41 @@ void TaskCANcode(void * pvParameters) {
             }
             break;
 
+          case 0x630: // BSPD Sensor Values (Example ID - Adjust if needed)
+            //if (rx_msg.data_length_code >= 8) {
+              // Adjust multipliers to match your CAN configuration scaling
+              globalVehicleState.tpsPercent = parseLE(rx_msg.data, 0) * 0.1f; 
+              globalVehicleState.brakePressKpa = parseLE(rx_msg.data, 2) * 1.0f; // Assuming raw kPa
+              globalVehicleState.tpsVoltage = parseLE(rx_msg.data, 4) * 0.01f;  
+              globalVehicleState.brakeVoltage = parseLE(rx_msg.data, 6) * 0.01f;
+
+              // --- THRESHOLD CAPTURE LOGIC ---
+              
+              // 1. TPS Capture (Threshold: 25%)
+              if (globalVehicleState.tpsPercent >= 25.0f && !globalVehicleState.tpsThresholdMet) {
+                globalVehicleState.capturedTpsVoltage = globalVehicleState.tpsVoltage;
+                globalVehicleState.tpsThresholdMet = true; // Latch it
+              } else if (globalVehicleState.tpsPercent < 20.0f) {
+                globalVehicleState.tpsThresholdMet = false; // Reset the latch
+              }
+
+              // 2. Brake Capture (Threshold: 3000 kPa / 30 bar)
+              if (globalVehicleState.brakePressKpa >= 3000.0f && !globalVehicleState.brakeThresholdMet) {
+                globalVehicleState.capturedBrakeVoltage = globalVehicleState.brakeVoltage;
+                globalVehicleState.brakeThresholdMet = true; // Latch it
+              } else if (globalVehicleState.brakePressKpa < 2500.0f) {
+                globalVehicleState.brakeThresholdMet = false; // Reset the latch
+              }
+            //}
+            break;
+
           // --- Per-eFuse Fault Data (0x710 to 0x717) ---
           case 0x710: case 0x711: case 0x712: case 0x713:
           case 0x714: case 0x715: case 0x716: case 0x717:
             if (rx_msg.data_length_code >= 8) {
               int channel = rx_msg.identifier - 0x710;
-              
-              // Byte 6 (low) and Byte 7 (high) form the PMBus status word
               uint16_t status_word = parseLE(rx_msg.data, 6);
-              
-              // PMBus fault bitmask (combines Over-Voltage, Over-Current, Under-Voltage, Temp, CML, etc.)
               const uint16_t FAULT_MASK = 0x703F; 
-              
               globalVehicleState.efuseFaultActive[channel] = ((status_word & FAULT_MASK) != 0);
             }
             break;
@@ -407,12 +433,10 @@ void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float ma
     if (val < minVal) val = minVal; 
     if (val > maxVal) val = maxVal;
 
-    // 240-degree sweep: 150 degrees (8 o'clock) to 390 degrees (4 o'clock)
     float start_angle = 2.618f; 
     float end_angle = 6.807f;   
     float mid_radius = radius - (thickness / 2.0f);
 
-    // 1. Draw Background Track
     float step_out = 1.0f / radius;
     for (float a = start_angle; a <= end_angle; a += step_out) {
         u8g2.drawPixel(round(cx + radius * cos(a)), round(cy + radius * sin(a)));
@@ -425,7 +449,6 @@ void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float ma
     u8g2.drawCircle(round(cx + mid_radius * cos(start_angle)), round(cy + mid_radius * sin(start_angle)), thickness / 2);
     u8g2.drawCircle(round(cx + mid_radius * cos(end_angle)), round(cy + mid_radius * sin(end_angle)), thickness / 2);
 
-    // 2. Draw inward-pointing tick marks
     for (int i = 0; i <= 4; ++i) {
         float angle = start_angle + i * ((end_angle - start_angle) / 4.0f);
         int x1 = round(cx + (radius - thickness) * cos(angle));
@@ -435,7 +458,6 @@ void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float ma
         u8g2.drawLine(x1, y1, x2, y2);
     }
 
-    // 3. Fill the active portion
     float normalizedVal = (val - minVal) / (maxVal - minVal);
     float target_angle = start_angle + (normalizedVal * (end_angle - start_angle));
 
@@ -446,7 +468,6 @@ void drawGauge(int cx, int cy, int radius, int thickness, float minVal, float ma
         }
     }
 
-    // 4. Solid caps
     u8g2.drawDisc(round(cx + mid_radius * cos(start_angle)), round(cy + mid_radius * sin(start_angle)), thickness / 2);
     if (normalizedVal > 0.01f) { 
         u8g2.drawDisc(round(cx + mid_radius * cos(target_angle)), round(cy + mid_radius * sin(target_angle)), thickness / 2);
@@ -476,10 +497,6 @@ void drawScreen1(const VehicleData& state) {
 
     u8g2.setFont(u8g2_font_profont17_tr);
 
-    // u8g2.drawStr(66, 17, "SoC");
-    // snprintf(textBuf, sizeof(textBuf), "%.0f%%", state.stateOfCharge);
-    // u8g2.drawStr(110, 17, textBuf);
-
     u8g2.drawStr(63, 17, "VOLT");
     snprintf(textBuf, sizeof(textBuf), "%.2f", state.batteryVolts); 
     u8g2.drawStr(104, 17, textBuf);
@@ -487,10 +504,6 @@ void drawScreen1(const VehicleData& state) {
     u8g2.drawStr(63, 38, "WATR");
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.engineWaterTemp);
     u8g2.drawStr(104, 38, textBuf);
-
-    // u8g2.drawStr(156, 17, "Hy.T");
-    // snprintf(textBuf, sizeof(textBuf), "%.1f", state.hybridTemp);
-    // u8g2.drawStr(199, 17, textBuf);
 
     u8g2.drawStr(153, 17, "OilP");
     snprintf(textBuf, sizeof(textBuf), "%.1f", state.oilPress);
@@ -515,15 +528,11 @@ void drawScreen1(const VehicleData& state) {
     snprintf(textBuf, sizeof(textBuf), "%d", state.speed);
     u8g2.drawStr(64, 124, textBuf);
 
-    // Center X: 194, Center Y: 84, Radius: 40, Thickness: 10
     drawGauge(194, 84, 40, 10, 0.0, 2.5, state.boostPressure);
 
-    // =========================================================================
-    // HIGH-PRIORITY POP-UP WARNING
-    // =========================================================================
     if (state.hasWarning && state.warningMsg != nullptr) {
         u8g2.setDrawColor(1);
-        u8g2.drawBox(60, 0, 180, 22); // Solid inverse background
+        u8g2.drawBox(60, 0, 180, 22);
         u8g2.setDrawColor(0); 
         u8g2.setFont(u8g2_font_profont17_tr);
         u8g2.drawStr(66, 17, state.warningMsg);
@@ -673,6 +682,65 @@ void drawScreen4(const VehicleData& state) {
   snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.I_out); u8g2.drawStr(181, 121, textBuffer); 
 }
 
+// --- SCREEN 5: BSPD Setup Screen ---
+void drawScreen5(const VehicleData& state) {
+  char textBuffer[16];
+  
+  u8g2.setFontMode(1);
+  u8g2.setBitmapMode(1);
+  
+  // rect 1
+  u8g2.drawFrame(0, 0, 240, 128);
+  // line 2
+  u8g2.drawLine(0, 64, 240, 64);
+  // line 3
+  u8g2.drawLine(80, 0, 80, 128);
+  // line 4
+  u8g2.drawLine(160, 0, 160, 128);
+  
+  // Headers
+  u8g2.setFont(u8g2_font_profont22_tr);
+  u8g2.drawStr(10, 20, "APP %");
+  u8g2.drawStr(10, 84, "BRK P");
+  u8g2.drawStr(90, 20, "APP V");
+  u8g2.drawStr(90, 84, "BRK V");
+  u8g2.drawStr(170, 20, "BSPD1");
+  u8g2.drawStr(170, 84, "BSPD2");
+
+  // Dynamic Value Rendering
+  u8g2.setFont(u8g2_font_profont29_tr); 
+
+  // Left Column (Live Measured Physical Values)
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.tpsPercent);
+  u8g2.drawStr(10, 52, textBuffer);
+  
+  // Displaying pressure in bar for the UI (Dividing kPa by 100)
+  snprintf(textBuffer, sizeof(textBuffer), "%.1f", state.brakePressKpa / 100.0f);
+  u8g2.drawStr(10, 116, textBuffer);
+
+  // Middle Column (Live Measured Sensor Voltages)
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.tpsVoltage);
+  u8g2.drawStr(90, 52, textBuffer);
+  
+  snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.brakeVoltage);
+  u8g2.drawStr(90, 116, textBuffer);
+
+  // Right Column (Captured Voltages at the exact threshold crossing)
+  if (state.capturedTpsVoltage > 0.01f) {
+    snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.capturedTpsVoltage);
+    u8g2.drawStr(170, 52, textBuffer);
+  } else {
+    u8g2.drawStr(170, 52, "---"); // Show dashes until a capture happens
+  }
+  
+  if (state.capturedBrakeVoltage > 0.01f) {
+    snprintf(textBuffer, sizeof(textBuffer), "%.2f", state.capturedBrakeVoltage);
+    u8g2.drawStr(170, 116, textBuffer);
+  } else {
+    u8g2.drawStr(170, 116, "---");
+  }
+}
+
 void setup() {
   delay(500); 
   
@@ -737,50 +805,40 @@ void setup() {
 
 // --- WARNING EVALUATOR (Runs in the UI Thread) ---
 void evaluateWarnings(VehicleData& state) {
-  // Static arrays to track the UI state across loop iterations
   static bool popupTriggered[8] = {false};
   static unsigned long popupTimer[8] = {0};
-  const unsigned long POPUP_DURATION = 3000; // Time in milliseconds the pop-up stays visible
+  const unsigned long POPUP_DURATION = 3000; 
 
   unsigned long currentMillis = millis();
   
-  // Reset warnings by default
   state.hasWarning = false;
   state.warningMsg = nullptr;
 
-  // 1. Evaluate specific eFuse faults first (Highest Priority)
-  // Names matching the physical channels assigned in pdu.c
   const char* efuseNames[8] = {
     "HYBRID", "VENT 1", "VENT 2", "IGN/INJ", 
     "FUELPUMP", "WATER P1", "WATER P2", "12V AUX"
   };
   
   for (int i = 0; i < 8; i++) {
-    // Detect positive fault edge (was healthy, is now faulting)
     if (state.efuseFaultActive[i]) {
       if (!popupTriggered[i]) {
-        popupTriggered[i] = true;         // Flag that we caught the error
-        popupTimer[i] = currentMillis;    // Start the 3-second countdown
+        popupTriggered[i] = true;         
+        popupTimer[i] = currentMillis;    
       }
     } else {
-      // Clear trigger so it can re-trigger if the fault goes away and comes back
       popupTriggered[i] = false;
     }
 
-    // Is the pop-up currently active and inside its 3000ms window?
     if (popupTriggered[i] && (currentMillis - popupTimer[i] < POPUP_DURATION)) {
       static char efuseMsg[24];
       snprintf(efuseMsg, sizeof(efuseMsg), "ERR: %s FAULT", efuseNames[i]);
       state.hasWarning = true;
       state.warningMsg = efuseMsg;
       
-      // Return immediately so we show this highest priority popup
-      // (If multiple hit simultaneously, it favors the lower index like HYBRID)
       return; 
     }
   }
 
-  // 2. Global PDU Faults (Secondary Priority, constant display)
   if (state.pduFetError) {
     state.hasWarning = true;
     state.warningMsg = "ERR: PDU FET FAULT";
@@ -798,32 +856,29 @@ void loop() {
   if (millis() - lastScreenUpdate >= 33) {
     lastScreenUpdate = millis();
 
-    VehicleData localState; // Safe snapshot of the state
+    VehicleData localState; 
 
-    // Attempt to lock data structure to copy it
     if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-      localState = globalVehicleState; // Atomically copy data
+      localState = globalVehicleState; 
       xSemaphoreGive(stateMutex);
     } else {
-      return; // Skip drawing this frame to prevent screen tearing if data is busy
+      return; 
     }
 
-    // --- Evaluate warning states before drawing ---
     evaluateWarnings(localState);
-
     updateLEDs(localState.rpm);
     u8g2.clearBuffer();          
     
-    // Pass the frozen snapshot to rendering functions
     if (localState.activeScreen == 1) {
       drawScreen1(localState); 
-    
     } else if (localState.activeScreen == 2) {
       drawScreen2(localState);
     } else if (localState.activeScreen == 3) {
       drawScreen3(localState);
     } else if (localState.activeScreen == 4) {
       drawScreen4(localState);
+    } else if (localState.activeScreen == 5) {
+      drawScreen5(localState); 
     }
     
     u8g2.sendBuffer();          
