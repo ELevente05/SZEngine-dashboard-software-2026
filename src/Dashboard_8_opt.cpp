@@ -194,7 +194,7 @@ VehicleData globalVehicleState;
 SemaphoreHandle_t stateMutex;
 
 // --- SETTINGS & TIMERS ---
-constexpr int rpmStart = 3000;
+constexpr int rpmStart = 6000;
 constexpr int rpmMax = 9500;
 unsigned long lastScreenUpdate = 0; 
 
@@ -384,8 +384,10 @@ void updateLEDs(int currentRpm) {
   bool redline = false;
 
   if (currentRpm >= rpmMax) {
+    strip.setBrightness(250);
     redline = true;
-  } else if (rpmMax > rpmStart && currentRpm >= rpmStart) { 
+  } else if (rpmMax > rpmStart && currentRpm >= rpmStart) {
+    strip.setBrightness(150); 
     numLedsToLight = static_cast<int>((currentRpm - rpmStart) * NUM_LEDS / static_cast<float>(rpmMax - rpmStart)) + 1;
     if (numLedsToLight > NUM_LEDS) numLedsToLight = NUM_LEDS;
   }
@@ -393,15 +395,15 @@ void updateLEDs(int currentRpm) {
   strip.clear(); 
 
   if (redline) {
-      for(int i = 0; i < NUM_LEDS; i++) {
-        strip.setPixelColor(i, strip.Color(0, 0, 255));
+      for(int i = 0; i < NUM_LEDS; i++) {        
+        strip.setPixelColor(i, strip.Color(255, 0, 0));
     }
   } else {
     for (int i = 0; i < NUM_LEDS; i++) {
       if (i >= NUM_LEDS - numLedsToLight) {
-        if (i >= 6) strip.setPixelColor(i, strip.Color(0, 255, 0));       
-        else if (i >= 3) strip.setPixelColor(i, strip.Color(255, 255, 0)); 
-        else strip.setPixelColor(i, strip.Color(255, 0, 0));               
+        if (i >= 6) strip.setPixelColor(i, strip.Color(0, 0, 255));       
+        else if (i >= 3) strip.setPixelColor(i, strip.Color(0, 255, 0)); 
+        else strip.setPixelColor(i, strip.Color(255, 85, 0));               
       }
     }
   }
